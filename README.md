@@ -353,3 +353,26 @@ python scripts/calibrate_renderer.py
 
 This is intended to prevent surrogate-loss improvements that do not transfer to
 the final Pillow raster output.
+
+
+### Structure-first rich cleanup schedule
+
+The `region_rich_refined_schedule` method performs two ordered-context passes:
+
+1. structure-aware refinement over a large high-residual tapered-stroke subset,
+2. rerender + residual recomputation,
+3. MSE cleanup refinement over a fresh large subset.
+
+Both passes preserve fixed primitive order through cached raster segments.
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round13/fleur_region_rich_schedule_2000 \
+  --budgets 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --method region_rich_refined_schedule \
+  --device cuda \
+  --optimized-stroke-count 512 \
+  --geometry-bound 0.03
+```

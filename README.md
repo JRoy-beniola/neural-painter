@@ -313,3 +313,22 @@ python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
 
 This tests whether the richer primitive vocabulary can surpass the old
 constant-width representation once both receive differentiable optimization.
+
+
+### Renderer consistency calibration
+
+The rich differentiable renderer is calibrated directly against the deterministic
+Pillow rasterizer. Rich soft rendering now uses ordered alpha compositing,
+pixel-scale hard-edge approximations, 24+ curve samples, and ellipse edge
+softness expressed in pixel units rather than relative radius units.
+
+Run:
+
+```bash
+python scripts/calibrate_renderer.py
+```
+
+The command reports MSE, PSNR, and SSIM between identical rich primitive
+programs rendered by the real and differentiable renderers. CI also enforces a
+minimum consistency threshold so future refinement changes cannot silently
+increase surrogate-renderer mismatch.

@@ -98,6 +98,46 @@ def _render_patch(
     draw.polygon(points, fill=(*_rgb8(patch.color), alpha))
 
 
+def render_primitive_overlay(
+    primitive: Primitive,
+    *,
+    size: tuple[int, int],
+    samples_per_curve: int = 32,
+) -> Image.Image:
+    """Rasterize one primitive to an RGBA overlay without a background."""
+    width, height = size
+    if width <= 0 or height <= 0:
+        raise ValueError("image size must be positive")
+    if samples_per_curve < 2:
+        raise ValueError("samples_per_curve must be at least 2")
+
+    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    if isinstance(primitive, Stroke):
+        _render_constant_stroke(
+            draw,
+            primitive,
+            width=width,
+            height=height,
+            samples_per_curve=samples_per_curve,
+        )
+    elif isinstance(primitive, TaperedStroke):
+        _render_tapered_stroke(
+            draw,
+            primitive,
+            width=width,
+            height=height,
+            samples_per_curve=samples_per_curve,
+        )
+    elif isinstance(primitive, EllipsePatch):
+        _render_patch(draw, primitive, width=width, height=height)
+    else:
+        raise TypeError(f"unsupported primitive type: {type(primitive)!r}")
+
+    return overlay
+
+
 def render_strokes(
     strokes: Iterable[Primitive],
     *,
@@ -120,30 +160,11 @@ def render_strokes(
     canvas = Image.new("RGB", size, background)
 
     for primitive in strokes:
-        overlay = Image.new("RGBA", size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
-
-        if isinstance(primitive, Stroke):
-            _render_constant_stroke(
-                draw,
-                primitive,
-                width=width,
-                height=height,
-                samples_per_curve=samples_per_curve,
-            )
-        elif isinstance(primitive, TaperedStroke):
-            _render_tapered_stroke(
-                draw,
-                primitive,
-                width=width,
-                height=height,
-                samples_per_curve=samples_per_curve,
-            )
-        elif isinstance(primitive, EllipsePatch):
-            _render_patch(draw, primitive, width=width, height=height)
-        else:
-            raise TypeError(f"unsupported primitive type: {type(primitive)!r}")
-
+        overlay = render_primitive_overlay(
+            primitive,
+            size=size,
+            samples_per_curve=samples_per_curve,
+        )
         canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay).convert("RGB")
 
     return canvas

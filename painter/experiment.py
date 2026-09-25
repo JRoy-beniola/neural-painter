@@ -45,6 +45,10 @@ def run_budget_experiment(
     continuous_color: bool = False,
     refinement_stages: int = 4,
     refinement_sweeps: int = 1,
+    cleanup_stroke_count: int = 64,
+    cleanup_geometry_bound: float = 0.0,
+    cleanup_optimize_geometry: bool = False,
+    cleanup_geometry_drift_weight: float = 0.10,
 ) -> dict[str, object]:
     """Run fixed-budget reconstructions and persist images plus metrics."""
     if not budgets or any(budget < 1 for budget in budgets):
@@ -122,16 +126,19 @@ def run_budget_experiment(
                 geometry_bound=geometry_bound,
             )
         elif method == "region_rich_refined_schedule":
-            stroke_batch = 512 if optimized_stroke_count is None else optimized_stroke_count
+            structure_strokes = 256 if optimized_stroke_count is None else optimized_stroke_count
             strokes, background, refinement = refine_region_rich_primitives_scheduled(
                 target_rgb,
                 palette,
                 budget,
                 seed=seed,
                 device=device,
-                structure_strokes=stroke_batch,
-                cleanup_strokes=stroke_batch,
-                geometry_bound=geometry_bound,
+                structure_strokes=structure_strokes,
+                cleanup_strokes=cleanup_stroke_count,
+                structure_geometry_bound=geometry_bound,
+                cleanup_geometry_bound=cleanup_geometry_bound,
+                cleanup_optimize_geometry=cleanup_optimize_geometry,
+                cleanup_geometry_drift_weight=cleanup_geometry_drift_weight,
             )
         elif method == "refined":
             strokes, background, refinement = refine_residual_strokes(

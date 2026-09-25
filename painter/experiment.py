@@ -13,10 +13,10 @@ from painter.iterative import paint_residual
 from painter.metrics import reconstruction_metrics
 from painter.palette import extract_palette
 from painter.refine import (
+    refine_region_rich_primitives,
     refine_residual_strokes,
     refine_residual_strokes_global,
     refine_residual_strokes_staged,
-    refine_region_rich_primitives,
 )
 from painter.renderer import render_strokes
 from painter.rich import paint_region_rich_residual, paint_rich_residual

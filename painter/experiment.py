@@ -18,11 +18,12 @@ from painter.refine import (
     refine_residual_strokes_staged,
 )
 from painter.renderer import render_strokes
+from painter.rich import paint_rich_residual
 from painter.sampling import sample_gradient_strokes
 from painter.structured import paint_structured_residual
 
 DEFAULT_BUDGETS = (100, 250, 500, 1000, 2000)
-METHODS = ("static", "residual", "structured", "refined", "refined_structure", "global_refined", "global_refined_structure", "staged_refined", "staged_refined_structure")
+METHODS = ("static", "residual", "structured", "rich_residual", "refined", "refined_structure", "global_refined", "global_refined_structure", "staged_refined", "staged_refined_structure")
 
 
 def run_budget_experiment(
@@ -72,6 +73,14 @@ def run_budget_experiment(
             refinement = None
         elif method == "structured":
             strokes, background = paint_structured_residual(
+                target_rgb,
+                palette,
+                budget,
+                seed=seed,
+            )
+            refinement = None
+        elif method == "rich_residual":
+            strokes, background = paint_rich_residual(
                 target_rgb,
                 palette,
                 budget,

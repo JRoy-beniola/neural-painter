@@ -3,7 +3,11 @@
 import numpy as np
 
 from painter.palette import extract_palette
-from painter.refine import refine_residual_strokes, refine_residual_strokes_global
+from painter.refine import (
+    refine_residual_strokes,
+    refine_residual_strokes_global,
+    refine_residual_strokes_staged,
+)
 
 
 def test_refinement_preserves_stroke_budget_and_improves_soft_loss() -> None:
@@ -166,3 +170,53 @@ def test_global_refinement_can_optimize_all_strokes() -> None:
     assert stats.refined_strokes == 6
     assert stats.optimize_geometry is False
     assert stats.continuous_color is False
+
+
+def test_staged_refinement_progresses_across_disjoint_batches() -> None:
+    image = np.zeros((24, 24, 3), dtype=np.float32)
+    image[5:19, 5:19] = (0.7, 0.85, 1.0)
+    palette = extract_palette(image, 2, random_state=0)
+
+    strokes, background, stats = refine_residual_strokes_staged(
+        image,
+        palette,
+        8,
+        seed=8,
+        stages=2,
+        batch_size=3,
+        steps_per_stage=2,
+        optimization_resolution=24,
+        optimize_geometry=True,
+        geometry_bound=0.02,
+        continuous_color=True,
+    )
+
+    assert len(strokes) == 8
+    assert background == (0, 0, 0)
+    assert stats.stages == 2
+    assert stats.refined_strokes == 6
+    assert stats.steps == 4
+    assert stats.final_loss >= 0.0
+
+
+def test_staged_refinement_stops_after_all_strokes_are_seen() -> None:
+    image = np.zeros((20, 20, 3), dtype=np.float32)
+    image[4:16, 4:16] = (0.3, 0.6, 0.9)
+    palette = extract_palette(image, 2, random_state=0)
+
+    strokes, _, stats = refine_residual_strokes_staged(
+        image,
+        palette,
+        5,
+        seed=9,
+        stages=5,
+        batch_size=2,
+        steps_per_stage=1,
+        optimization_resolution=20,
+        optimize_geometry=False,
+        continuous_color=False,
+    )
+
+    assert len(strokes) == 5
+    assert stats.refined_strokes == 5
+    assert stats.stages == 3

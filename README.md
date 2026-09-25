@@ -263,3 +263,28 @@ python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
 
 This is the first direct representation-capacity comparison against the old
 constant-width stroke program at the same primitive budget.
+
+
+### Region-fitted patches
+
+The `region_rich_residual` method replaces randomly sampled area patches with
+connected residual-region fitting:
+
+1. compute residual error and smoothness,
+2. threshold high-scoring smooth residual regions,
+3. extract connected components,
+4. fit an oriented ellipse from component covariance,
+5. accept the patch only when its alpha-composited color reduces local RGB error,
+6. return unused patch budget to tapered detail strokes.
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round9/fleur_region_rich_2000 \
+  --budgets 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --method region_rich_residual
+```
+
+This directly tests whether the poor first rich-painter result came from the
+primitive vocabulary or from uninformed patch placement.

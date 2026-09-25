@@ -54,3 +54,29 @@ def test_refinement_is_deterministic_for_fixed_seed() -> None:
 
     assert left == right
     assert left_stats == right_stats
+
+
+def test_refinement_keeps_geometry_fixed() -> None:
+    image = np.zeros((24, 24, 3), dtype=np.float32)
+    image[6:18, 6:18] = (0.8, 0.9, 1.0)
+    palette = extract_palette(image, 2, random_state=0)
+
+    from painter.iterative import paint_residual
+
+    baseline, _ = paint_residual(image, palette, 8, seed=3)
+    refined, _, _ = refine_residual_strokes(
+        image,
+        palette,
+        8,
+        seed=3,
+        steps=2,
+        max_refine_strokes=4,
+        optimization_resolution=24,
+    )
+
+    for before, after in zip(baseline, refined, strict=True):
+        assert before.p0 == after.p0
+        assert before.p1 == after.p1
+        assert before.p2 == after.p2
+        assert 0.004 <= after.width <= 0.035
+        assert 0.35 <= after.opacity <= 0.95

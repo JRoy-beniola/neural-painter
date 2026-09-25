@@ -58,7 +58,6 @@ def run_budget_experiment(
                 palette,
                 budget,
                 seed=seed,
-                device=device,
             )
             refinement = None
         elif method == "structured":
@@ -75,6 +74,7 @@ def run_budget_experiment(
                 palette,
                 budget,
                 seed=seed,
+                device=device,
             )
 
         painted = render_strokes(strokes, size=source.size, background=background)

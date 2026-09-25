@@ -197,3 +197,25 @@ def test_region_rich_residual_budget_experiment_writes_output(tmp_path) -> None:
     assert report["method"] == "region_rich_residual"
     assert report["runs"][0]["stroke_count"] == 8
     assert (output_dir / "painted_8.png").exists()
+
+
+def test_region_rich_refined_budget_experiment_records_metadata(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "region_rich_refined"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=7,
+        budgets=[8],
+        method="region_rich_refined",
+        optimized_stroke_count=4,
+        geometry_bound=0.02,
+    )
+
+    assert report["method"] == "region_rich_refined"
+    refinement = report["runs"][0]["refinement"]
+    assert refinement["refined_strokes"] >= 1
+    assert refinement["final_loss"] <= refinement["initial_loss"]

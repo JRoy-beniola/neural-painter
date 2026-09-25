@@ -5,6 +5,12 @@ from __future__ import annotations
 import torch
 
 
+def _ste_quantize_unit(values: torch.Tensor) -> torch.Tensor:
+    """Use 8-bit values in the forward pass while retaining identity gradients."""
+    quantized = torch.round(torch.clamp(values, 0.0, 1.0) * 255.0) / 255.0
+    return values + (quantized - values).detach()
+
+
 def _ordered_composite(
     base_rgb: torch.Tensor,
     alpha: torch.Tensor,
@@ -12,9 +18,10 @@ def _ordered_composite(
 ) -> torch.Tensor:
     """Alpha-composite primitives in program order like the raster renderer."""
     canvas = base_rgb
+    raster_colors = _ste_quantize_unit(colors)
     for index in range(alpha.shape[0]):
         a = alpha[index][..., None]
-        canvas = canvas * (1.0 - a) + colors[index][None, None, :] * a
+        canvas = canvas * (1.0 - a) + raster_colors[index][None, None, :] * a
     return canvas
 
 
@@ -119,6 +126,10 @@ def soft_tapered_alpha_maps(
         + second_half[None, :] * width_end[:, None]
     )
     sample_widths = torch.where(t[None, :] <= 0.5, widths_first, widths_second)
+    raster_scale = float(min(height, width))
+    pixel_widths = torch.clamp(torch.round(sample_widths * raster_scale), min=1.0)
+    raster_widths = pixel_widths / raster_scale
+    sample_widths = sample_widths + (raster_widths - sample_widths).detach()
 
     diff = grid[None, :, :, None, :] - points[:, None, None, :, :]
     distance = torch.sqrt(torch.sum(diff * diff, dim=-1) + 1e-10)
@@ -128,7 +139,8 @@ def soft_tapered_alpha_maps(
     soft_coverage = 1.0 - torch.prod(1.0 - sample_coverage, dim=-1)
     hard_coverage = (soft_coverage >= 0.5).to(soft_coverage.dtype)
     coverage = soft_coverage + (hard_coverage - soft_coverage).detach()
-    return torch.clamp(opacities[:, None, None] * coverage, 0.0, 1.0)
+    raster_opacity = _ste_quantize_unit(opacities)
+    return torch.clamp(raster_opacity[:, None, None] * coverage, 0.0, 1.0)
 
 
 def soft_ellipse_alpha_maps(
@@ -164,7 +176,8 @@ def soft_ellipse_alpha_maps(
     soft_coverage = torch.sigmoid(signed_distance / pixel_softness)
     hard_coverage = (soft_coverage >= 0.5).to(soft_coverage.dtype)
     coverage = soft_coverage + (hard_coverage - soft_coverage).detach()
-    return torch.clamp(opacities[:, None, None] * coverage, 0.0, 1.0)
+    raster_opacity = _ste_quantize_unit(opacities)
+    return torch.clamp(raster_opacity[:, None, None] * coverage, 0.0, 1.0)
 
 
 def render_soft_tapered_strokes(

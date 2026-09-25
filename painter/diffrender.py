@@ -125,7 +125,9 @@ def soft_tapered_alpha_maps(
     radius = 0.5 * sample_widths[:, None, None, :]
     pixel_softness = edge_softness_pixels / max(min(height, width) - 1, 1)
     sample_coverage = torch.sigmoid((radius - distance) / pixel_softness)
-    coverage = 1.0 - torch.prod(1.0 - sample_coverage, dim=-1)
+    soft_coverage = 1.0 - torch.prod(1.0 - sample_coverage, dim=-1)
+    hard_coverage = (soft_coverage >= 0.5).to(soft_coverage.dtype)
+    coverage = soft_coverage + (hard_coverage - soft_coverage).detach()
     return torch.clamp(opacities[:, None, None] * coverage, 0.0, 1.0)
 
 
@@ -159,7 +161,9 @@ def soft_ellipse_alpha_maps(
     normalized_radius = torch.sqrt((local_x / rx) ** 2 + (local_y / ry) ** 2 + 1e-10)
     signed_distance = (1.0 - normalized_radius) * torch.minimum(rx, ry)
     pixel_softness = edge_softness_pixels / max(min(height, width) - 1, 1)
-    coverage = torch.sigmoid(signed_distance / pixel_softness)
+    soft_coverage = torch.sigmoid(signed_distance / pixel_softness)
+    hard_coverage = (soft_coverage >= 0.5).to(soft_coverage.dtype)
+    coverage = soft_coverage + (hard_coverage - soft_coverage).detach()
     return torch.clamp(opacities[:, None, None] * coverage, 0.0, 1.0)
 
 

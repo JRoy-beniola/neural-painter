@@ -18,6 +18,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--budgets", type=int, nargs="+", default=list(DEFAULT_BUDGETS))
     parser.add_argument("--method", choices=METHODS, default="static")
     parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
+    parser.add_argument(
+        "--optimized-stroke-count",
+        type=int,
+        default=256,
+        help="Strokes to optimize in global refinement; use 0 for all strokes.",
+    )
+    parser.add_argument("--optimize-geometry", action="store_true")
+    parser.add_argument("--geometry-bound", type=float, default=0.03)
+    parser.add_argument("--continuous-color", action="store_true")
     return parser.parse_args()
 
 
@@ -31,6 +40,10 @@ def main() -> None:
         budgets=args.budgets,
         method=args.method,
         device=args.device,
+        optimized_stroke_count=None if args.optimized_stroke_count == 0 else args.optimized_stroke_count,
+        optimize_geometry=args.optimize_geometry,
+        geometry_bound=args.geometry_bound,
+        continuous_color=args.continuous_color,
     )
     print(json.dumps(report, indent=2))
 

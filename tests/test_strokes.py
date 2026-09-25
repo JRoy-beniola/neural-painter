@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from painter.stroke import Stroke
+from painter.stroke import EllipsePatch, Stroke, TaperedStroke
 
 
 def make_stroke(**overrides: object) -> Stroke:
@@ -92,3 +92,41 @@ def test_stroke_is_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         stroke.width = 0.2
+
+
+def test_tapered_stroke_interpolates_width() -> None:
+    stroke = TaperedStroke(
+        p0=(0.1, 0.5),
+        p1=(0.5, 0.5),
+        p2=(0.9, 0.5),
+        width_start=0.01,
+        width_mid=0.05,
+        width_end=0.02,
+        color=(0.2, 0.4, 0.6),
+        opacity=0.8,
+    )
+
+    assert stroke.width_at(0.0) == pytest.approx(0.01)
+    assert stroke.width_at(0.5) == pytest.approx(0.05)
+    assert stroke.width_at(1.0) == pytest.approx(0.02)
+
+
+def test_ellipse_patch_validates_bounds() -> None:
+    patch = EllipsePatch(
+        center=(0.5, 0.5),
+        radius_x=0.1,
+        radius_y=0.05,
+        angle=0.3,
+        color=(0.2, 0.4, 0.6),
+        opacity=0.75,
+    )
+    assert patch.center == (0.5, 0.5)
+
+    with pytest.raises(ValueError):
+        EllipsePatch(
+            center=(0.5, 0.5),
+            radius_x=0.0,
+            radius_y=0.05,
+            angle=0.0,
+            color=(0.2, 0.4, 0.6),
+        )

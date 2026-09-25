@@ -6,18 +6,30 @@ Research prototype for **reference-conditioned, persistent stroke-space neural p
 
 Phase 0 tests whether an explicit stroke representation is a viable state space before introducing learned models.
 
-Current baseline:
+Two procedural methods are currently available:
 
 ```text
+static baseline
 input image
   -> CIELAB palette extraction
   -> image-gradient estimation
   -> gradient-biased stroke sampling
   -> quadratic Bezier stroke rendering
-  -> painted reconstruction
 ```
 
-The baseline is intentionally procedural. Residual-driven placement, differentiable optimisation, reference conditioning, and temporal persistence come later as separately testable additions.
+```text
+residual painter
+input image
+  -> robust border-background estimate
+  -> CIELAB palette extraction
+  -> coarse-to-fine stroke passes
+  -> render current canvas
+  -> compute reconstruction residual
+  -> residual + gradient weighted resampling
+  -> repeat
+```
+
+The static method is preserved as the original baseline. The residual method adds background-aware initialization and iterative coarse-to-fine stroke allocation so the two can be compared directly.
 
 ## Setup
 
@@ -37,21 +49,35 @@ python scripts/paint_image.py assets/inputs/example.jpg \
 
 ## Stroke-budget experiment
 
+Static baseline:
+
 ```bash
 python scripts/run_budget_experiment.py assets/inputs/example.jpg \
-  --output-dir outputs/phase0_budget \
+  --output-dir outputs/phase0_static \
   --budgets 100 250 500 1000 2000 \
   --palette-size 8 \
-  --seed 0
+  --seed 0 \
+  --method static
 ```
 
-The experiment writes the target image, one reconstruction per stroke budget, and `metrics.json` with MSE, PSNR, SSIM, and elapsed rendering time.
+Residual painter:
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/example.jpg \
+  --output-dir outputs/phase0_residual \
+  --budgets 100 250 500 1000 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --method residual
+```
+
+Each experiment writes the target image, one reconstruction per stroke budget, and `metrics.json` with MSE, PSNR, SSIM, elapsed rendering time, method metadata, and the canvas background used for each run.
 
 ## Planned progression
 
 1. Procedural stroke renderer — implemented
 2. Fixed-budget gradient baseline — implemented
-3. Residual-driven image painting
+3. Residual-driven image painting — implemented
 4. Differentiable stroke optimisation
 5. Reference-conditioned stroke policies
 6. Persistent stroke transport across video frames

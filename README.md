@@ -183,3 +183,31 @@ python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
 ```
 
 Use `global_refined_structure` for the MSE + SSIM + Sobel-edge objective.
+
+
+### Staged global refinement
+
+The `staged_refined` and `staged_refined_structure` methods progressively
+repair a large stroke program in disjoint batches. After each stage, the current
+program is rerendered, residual error is recomputed, and the next highest-error
+unseen strokes are selected.
+
+This keeps GPU memory bounded while allowing much more than 256 strokes to be
+optimized across a 2000-stroke program.
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round6/fleur_staged_refined_2000 \
+  --budgets 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --method staged_refined \
+  --device cuda \
+  --optimized-stroke-count 256 \
+  --refinement-stages 4 \
+  --optimize-geometry \
+  --geometry-bound 0.03 \
+  --continuous-color
+```
+
+With the defaults above, four stages optimize up to 1024 distinct strokes.

@@ -3,6 +3,7 @@
 import pytest
 from PIL import Image
 
+from painter.calibration import rich_renderer_consistency
 from painter.renderer import render_strokes
 from painter.stroke import EllipsePatch, Stroke, TaperedStroke
 
@@ -95,3 +96,10 @@ def test_renderer_supports_tapered_strokes_and_patches() -> None:
 
     center = image.getpixel((50, 40))
     assert center != (255, 255, 255)
+
+
+def test_rich_soft_renderer_tracks_raster_renderer() -> None:
+    metrics = rich_renderer_consistency(size=(96, 96))
+
+    assert metrics["mse"] < 0.01
+    assert metrics["ssim"] > 0.85

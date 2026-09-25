@@ -25,4 +25,4 @@ def estimate_border_background(image_rgb: np.ndarray) -> tuple[int, int, int]:
     border = np.concatenate((top, bottom, left, right), axis=0)
 
     median = np.median(border, axis=0)
-    return tuple(int(round(float(channel) * 255.0)) for channel in median)
+    return tuple(round(float(channel) * 255.0) for channel in median)

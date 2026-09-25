@@ -7,6 +7,7 @@ from painter.refine import (
     refine_residual_strokes,
     refine_residual_strokes_global,
     refine_residual_strokes_staged,
+    refine_region_rich_primitives,
 )
 
 
@@ -246,3 +247,27 @@ def test_staged_refinement_revisits_strokes_across_sweeps() -> None:
     assert stats.stages == 6
     assert stats.sweeps == 2
     assert stats.steps == 6
+
+
+def test_region_rich_refinement_preserves_budget_and_reduces_loss() -> None:
+    image = np.zeros((24, 24, 3), dtype=np.float32)
+    image[5:19, 5:19] = (0.75, 0.9, 1.0)
+    palette = extract_palette(image, 2, random_state=0)
+
+    primitives, background, stats = refine_region_rich_primitives(
+        image,
+        palette,
+        8,
+        seed=11,
+        steps=2,
+        max_refine_strokes=4,
+        optimization_resolution=24,
+        objective="mse",
+        geometry_bound=0.02,
+    )
+
+    assert len(primitives) == 8
+    assert background == (0, 0, 0)
+    assert stats.refined_strokes >= 1
+    assert stats.final_loss <= stats.initial_loss
+    assert stats.optimize_geometry is True

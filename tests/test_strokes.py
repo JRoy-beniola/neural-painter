@@ -1,1 +1,93 @@
-"""Tests for stroke-space invariants and rendering primitives."""
+"""Tests for the renderer-independent stroke-space contract."""
+
+import math
+
+import pytest
+
+from painter.stroke import Stroke
+
+
+def make_stroke(**overrides: object) -> Stroke:
+    values = {
+        "p0": (0.1, 0.2),
+        "p1": (0.5, 0.8),
+        "p2": (0.9, 0.3),
+        "width": 0.05,
+        "color": (0.2, 0.4, 0.6),
+        "opacity": 0.75,
+    }
+    values.update(overrides)
+    return Stroke(**values)
+
+
+def test_valid_stroke_is_constructed() -> None:
+    stroke = make_stroke()
+
+    assert stroke.p0 == (0.1, 0.2)
+    assert stroke.width == 0.05
+    assert stroke.color == (0.2, 0.4, 0.6)
+    assert stroke.opacity == 0.75
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("p0", (-0.01, 0.5)),
+        ("p1", (0.5, 1.01)),
+        ("p2", (math.nan, 0.5)),
+    ],
+)
+def test_control_points_must_be_finite_and_normalized(field: str, value: object) -> None:
+    with pytest.raises(ValueError):
+        make_stroke(**{field: value})
+
+
+@pytest.mark.parametrize("width", [0.0, -0.1, 1.01, math.inf, math.nan])
+def test_width_must_be_positive_finite_and_normalized(width: float) -> None:
+    with pytest.raises(ValueError):
+        make_stroke(width=width)
+
+
+@pytest.mark.parametrize(
+    "color",
+    [
+        (-0.01, 0.5, 0.5),
+        (0.5, 1.01, 0.5),
+        (0.5, 0.5, math.nan),
+    ],
+)
+def test_color_channels_must_be_finite_and_normalized(color: tuple[float, ...]) -> None:
+    with pytest.raises(ValueError):
+        make_stroke(color=color)
+
+
+@pytest.mark.parametrize("opacity", [-0.01, 1.01, math.inf, math.nan])
+def test_opacity_must_be_finite_and_normalized(opacity: float) -> None:
+    with pytest.raises(ValueError):
+        make_stroke(opacity=opacity)
+
+
+def test_point_at_hits_bezier_endpoints() -> None:
+    stroke = make_stroke()
+
+    assert stroke.point_at(0.0) == stroke.p0
+    assert stroke.point_at(1.0) == stroke.p2
+
+
+def test_point_at_matches_quadratic_bezier_midpoint() -> None:
+    stroke = make_stroke(p0=(0.0, 0.0), p1=(0.5, 1.0), p2=(1.0, 0.0))
+
+    assert stroke.point_at(0.5) == pytest.approx((0.5, 0.5))
+
+
+@pytest.mark.parametrize("t", [-0.01, 1.01, math.nan])
+def test_point_at_requires_normalized_parameter(t: float) -> None:
+    with pytest.raises(ValueError):
+        make_stroke().point_at(t)
+
+
+def test_stroke_is_immutable() -> None:
+    stroke = make_stroke()
+
+    with pytest.raises(Exception):
+        stroke.width = 0.2

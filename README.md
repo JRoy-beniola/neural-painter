@@ -146,3 +146,40 @@ python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
   --method refined_structure \
   --device cuda
 ```
+
+
+### Global reconstruction-capacity audit
+
+The `global_refined` and `global_refined_structure` methods test whether the
+current stroke representation is limited mainly by optimization/allocation or by
+the primitive itself.
+
+They start from the residual painter, select many high-error strokes (or all
+strokes), and optionally optimize bounded control-point motion:
+
+```text
+p = clamp(p_init + geometry_bound * tanh(delta), 0, 1)
+```
+
+This permits local geometric correction without the long-range drift observed in
+the first unconstrained refinement experiment. Width and opacity are optimized
+jointly, and `--continuous-color` allows optimized strokes to move off the
+initial palette.
+
+Use `--optimized-stroke-count 0` to optimize all strokes.
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round5/fleur_global_refined_500 \
+  --budgets 500 \
+  --palette-size 8 \
+  --seed 0 \
+  --method global_refined \
+  --device cuda \
+  --optimized-stroke-count 256 \
+  --optimize-geometry \
+  --geometry-bound 0.03 \
+  --continuous-color
+```
+
+Use `global_refined_structure` for the MSE + SSIM + Sobel-edge objective.

@@ -94,7 +94,7 @@ The central research hypothesis is that explicit persistent strokes can support 
 
 ## Differentiable refinement
 
-The `refined` method starts from the residual painter, selects strokes centered on the highest-error regions, and optimizes their control points, widths, colors, and opacities with PyTorch through a low-resolution differentiable soft rasterizer. Stroke count and ordering are preserved.
+The `refined` method starts from the residual painter, selects strokes centered on the highest-error regions, and optimizes only width, color, and opacity with PyTorch through a low-resolution differentiable soft rasterizer. Stroke geometry, count, and ordering are preserved.
 
 ```bash
 python scripts/run_budget_experiment.py assets/inputs/example.jpg \
@@ -125,3 +125,24 @@ python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
 ```
 
 Use `--device cpu` to force CPU execution.
+
+
+### Structure-aware refinement
+
+The `refined_structure` method keeps the same conservative appearance-only parameterization but replaces pure MSE with a composite objective:
+
+```text
+MSE + 0.20 * SSIM loss + 0.10 * Sobel edge loss
+```
+
+This experiment tests whether optimizing local structural similarity and edge fidelity can improve the final raster reconstruction where pure MSE refinement previously produced only marginal PSNR/MSE gains and slightly worse SSIM.
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round4/fleur_de_lis_refined_structure_500 \
+  --budgets 500 \
+  --palette-size 8 \
+  --seed 0 \
+  --method refined_structure \
+  --device cuda
+```

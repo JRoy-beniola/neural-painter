@@ -107,3 +107,29 @@ def test_global_refined_budget_experiment_records_capacity_audit_metadata(tmp_pa
     assert refinement["geometry_bound"] == 0.02
     assert refinement["continuous_color"] is True
     assert refinement["final_loss"] <= refinement["initial_loss"]
+
+
+def test_staged_refined_budget_experiment_records_stage_metadata(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "staged_refined"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=7,
+        budgets=[6],
+        method="staged_refined",
+        optimized_stroke_count=2,
+        optimize_geometry=True,
+        geometry_bound=0.02,
+        continuous_color=True,
+        refinement_stages=2,
+    )
+
+    assert report["method"] == "staged_refined"
+    refinement = report["runs"][0]["refinement"]
+    assert refinement["stages"] == 2
+    assert refinement["refined_strokes"] == 4
+    assert refinement["optimize_geometry"] is True

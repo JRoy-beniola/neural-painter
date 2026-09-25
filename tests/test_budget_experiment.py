@@ -159,3 +159,22 @@ def test_staged_refined_budget_experiment_records_sweep_metadata(tmp_path) -> No
     assert refinement["sweeps"] == 2
     assert refinement["stages"] == 6
     assert refinement["refined_strokes"] == 6
+
+
+def test_rich_residual_budget_experiment_writes_output(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "rich"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=7,
+        budgets=[8],
+        method="rich_residual",
+    )
+
+    assert report["method"] == "rich_residual"
+    assert report["runs"][0]["stroke_count"] == 8
+    assert (output_dir / "painted_8.png").exists()

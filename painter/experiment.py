@@ -12,12 +12,13 @@ from PIL import Image
 from painter.iterative import paint_residual
 from painter.metrics import reconstruction_metrics
 from painter.palette import extract_palette
+from painter.refine import refine_residual_strokes
 from painter.renderer import render_strokes
 from painter.sampling import sample_gradient_strokes
 from painter.structured import paint_structured_residual
 
 DEFAULT_BUDGETS = (100, 250, 500, 1000, 2000)
-METHODS = ("static", "residual", "structured")
+METHODS = ("static", "residual", "structured", "refined")
 
 
 def run_budget_experiment(
@@ -49,6 +50,7 @@ def run_budget_experiment(
         if method == "static":
             strokes = sample_gradient_strokes(target_rgb, palette, budget, seed=seed)
             background = (255, 255, 255)
+            refinement = None
         elif method == "residual":
             strokes, background = paint_residual(
                 target_rgb,
@@ -56,8 +58,17 @@ def run_budget_experiment(
                 budget,
                 seed=seed,
             )
-        else:
+            refinement = None
+        elif method == "structured":
             strokes, background = paint_structured_residual(
+                target_rgb,
+                palette,
+                budget,
+                seed=seed,
+            )
+            refinement = None
+        else:
+            strokes, background, refinement = refine_residual_strokes(
                 target_rgb,
                 palette,
                 budget,
@@ -72,15 +83,21 @@ def run_budget_experiment(
         painted_rgb = np.asarray(painted, dtype=np.float32) / 255.0
 
         metrics = reconstruction_metrics(target_rgb, painted_rgb)
-        runs.append(
-            {
-                "stroke_count": budget,
-                "render_ms": elapsed_ms,
-                "output": painted_path.name,
-                "background_rgb": list(background),
-                **metrics,
+        run: dict[str, float | int | str | list[int] | dict[str, float | int]] = {
+            "stroke_count": budget,
+            "render_ms": elapsed_ms,
+            "output": painted_path.name,
+            "background_rgb": list(background),
+            **metrics,
+        }
+        if refinement is not None:
+            run["refinement"] = {
+                "refined_strokes": refinement.refined_strokes,
+                "steps": refinement.steps,
+                "initial_loss": refinement.initial_loss,
+                "final_loss": refinement.final_loss,
             }
-        )
+        runs.append(run)
 
     report: dict[str, object] = {
         "input": str(image_path),

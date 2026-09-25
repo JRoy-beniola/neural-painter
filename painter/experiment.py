@@ -29,6 +29,7 @@ def run_budget_experiment(
     seed: int,
     budgets: list[int] | tuple[int, ...],
     method: str = "static",
+    device: str = "auto",
 ) -> dict[str, object]:
     """Run fixed-budget reconstructions and persist images plus metrics."""
     if not budgets or any(budget < 1 for budget in budgets):
@@ -57,6 +58,7 @@ def run_budget_experiment(
                 palette,
                 budget,
                 seed=seed,
+                device=device,
             )
             refinement = None
         elif method == "structured":
@@ -96,6 +98,7 @@ def run_budget_experiment(
                 "steps": refinement.steps,
                 "initial_loss": refinement.initial_loss,
                 "final_loss": refinement.final_loss,
+                "device": refinement.device,
             }
         runs.append(run)
 

@@ -1,6 +1,7 @@
 """Tests for the renderer-independent stroke-space contract."""
 
 import math
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -89,5 +90,5 @@ def test_point_at_requires_normalized_parameter(t: float) -> None:
 def test_stroke_is_immutable() -> None:
     stroke = make_stroke()
 
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         stroke.width = 0.2

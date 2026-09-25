@@ -14,9 +14,10 @@ from painter.metrics import reconstruction_metrics
 from painter.palette import extract_palette
 from painter.renderer import render_strokes
 from painter.sampling import sample_gradient_strokes
+from painter.structured import paint_structured_residual
 
 DEFAULT_BUDGETS = (100, 250, 500, 1000, 2000)
-METHODS = ("static", "residual")
+METHODS = ("static", "residual", "structured")
 
 
 def run_budget_experiment(
@@ -48,8 +49,15 @@ def run_budget_experiment(
         if method == "static":
             strokes = sample_gradient_strokes(target_rgb, palette, budget, seed=seed)
             background = (255, 255, 255)
-        else:
+        elif method == "residual":
             strokes, background = paint_residual(
+                target_rgb,
+                palette,
+                budget,
+                seed=seed,
+            )
+        else:
+            strokes, background = paint_structured_residual(
                 target_rgb,
                 palette,
                 budget,

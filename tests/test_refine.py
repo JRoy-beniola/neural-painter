@@ -4,10 +4,10 @@ import numpy as np
 
 from painter.palette import extract_palette
 from painter.refine import (
+    refine_region_rich_primitives,
     refine_residual_strokes,
     refine_residual_strokes_global,
     refine_residual_strokes_staged,
-    refine_region_rich_primitives,
 )
 
 

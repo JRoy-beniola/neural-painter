@@ -3,7 +3,7 @@
 import numpy as np
 
 from painter.palette import extract_palette
-from painter.refine import refine_residual_strokes
+from painter.refine import refine_residual_strokes, refine_residual_strokes_global
 
 
 def test_refinement_preserves_stroke_budget_and_improves_soft_loss() -> None:
@@ -101,3 +101,68 @@ def test_structure_aware_refinement_improves_composite_loss() -> None:
     assert len(strokes) == 8
     assert stats.objective == "structure"
     assert stats.final_loss <= stats.initial_loss
+
+
+def test_global_refinement_preserves_budget_and_bounds_geometry() -> None:
+    image = np.zeros((24, 24, 3), dtype=np.float32)
+    image[5:19, 5:19] = (0.75, 0.9, 1.0)
+    palette = extract_palette(image, 2, random_state=0)
+
+    from painter.iterative import paint_residual
+
+    baseline, _ = paint_residual(image, palette, 8, seed=6)
+    refined, background, stats = refine_residual_strokes_global(
+        image,
+        palette,
+        8,
+        seed=6,
+        steps=3,
+        optimized_stroke_count=4,
+        optimization_resolution=24,
+        objective="mse",
+        optimize_geometry=True,
+        geometry_bound=0.02,
+        continuous_color=True,
+    )
+
+    assert len(refined) == 8
+    assert background == (0, 0, 0)
+    assert stats.refined_strokes == 4
+    assert stats.optimize_geometry is True
+    assert stats.geometry_bound == 0.02
+    assert stats.continuous_color is True
+    assert stats.final_loss <= stats.initial_loss
+
+    for before, after in zip(baseline, refined, strict=True):
+        for before_point, after_point in (
+            (before.p0, after.p0),
+            (before.p1, after.p1),
+            (before.p2, after.p2),
+        ):
+            assert max(
+                abs(before_value - after_value)
+                for before_value, after_value in zip(before_point, after_point, strict=True)
+            ) <= 0.020001
+
+
+def test_global_refinement_can_optimize_all_strokes() -> None:
+    image = np.zeros((20, 20, 3), dtype=np.float32)
+    image[4:16, 4:16] = (0.3, 0.65, 0.9)
+    palette = extract_palette(image, 2, random_state=0)
+
+    strokes, _, stats = refine_residual_strokes_global(
+        image,
+        palette,
+        6,
+        seed=7,
+        steps=2,
+        optimized_stroke_count=None,
+        optimization_resolution=20,
+        optimize_geometry=False,
+        continuous_color=False,
+    )
+
+    assert len(strokes) == 6
+    assert stats.refined_strokes == 6
+    assert stats.optimize_geometry is False
+    assert stats.continuous_color is False

@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from painter.experiment import DEFAULT_BUDGETS, run_budget_experiment
+from painter.experiment import DEFAULT_BUDGETS, METHODS, run_budget_experiment
 
 
 def parse_args() -> argparse.Namespace:
@@ -16,6 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--palette-size", type=int, default=8)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--budgets", type=int, nargs="+", default=list(DEFAULT_BUDGETS))
+    parser.add_argument("--method", choices=METHODS, default="static")
     return parser.parse_args()
 
 
@@ -27,6 +28,7 @@ def main() -> None:
         palette_size=args.palette_size,
         seed=args.seed,
         budgets=args.budgets,
+        method=args.method,
     )
     print(json.dumps(report, indent=2))
 

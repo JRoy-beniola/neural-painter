@@ -75,29 +75,26 @@ def render_soft_strokes(
 
 
 
-def render_soft_tapered_strokes(
+def soft_tapered_alpha_maps(
     p0: torch.Tensor,
     p1: torch.Tensor,
     p2: torch.Tensor,
     width_start: torch.Tensor,
     width_mid: torch.Tensor,
     width_end: torch.Tensor,
-    colors: torch.Tensor,
     opacities: torch.Tensor,
     *,
-    base_rgb: torch.Tensor,
+    image_size: tuple[int, int],
     samples_per_curve: int = 24,
     edge_softness_pixels: float = 0.75,
 ) -> torch.Tensor:
-    """Render tapered Bezier strokes using near-raster hard-edge soft coverage."""
-    if base_rgb.ndim != 3 or base_rgb.shape[-1] != 3:
-        raise ValueError("base_rgb must have shape (H, W, 3)")
+    """Return one soft alpha map per tapered stroke."""
+    width, height = image_size
     if samples_per_curve < 2:
         raise ValueError("samples_per_curve must be at least 2")
 
     device = p0.device
     dtype = p0.dtype
-    height, width, _ = base_rgb.shape
     ys = torch.linspace(0.0, 1.0, height, device=device, dtype=dtype)
     xs = torch.linspace(0.0, 1.0, width, device=device, dtype=dtype)
     grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
@@ -129,28 +126,23 @@ def render_soft_tapered_strokes(
     pixel_softness = edge_softness_pixels / max(min(height, width) - 1, 1)
     sample_coverage = torch.sigmoid((radius - distance) / pixel_softness)
     coverage = 1.0 - torch.prod(1.0 - sample_coverage, dim=-1)
-    alpha = torch.clamp(opacities[:, None, None] * coverage, 0.0, 1.0)
-    return _ordered_composite(base_rgb, alpha, colors)
+    return torch.clamp(opacities[:, None, None] * coverage, 0.0, 1.0)
 
 
-def render_soft_ellipses(
+def soft_ellipse_alpha_maps(
     centers: torch.Tensor,
     radii_x: torch.Tensor,
     radii_y: torch.Tensor,
     angles: torch.Tensor,
-    colors: torch.Tensor,
     opacities: torch.Tensor,
     *,
-    base_rgb: torch.Tensor,
+    image_size: tuple[int, int],
     edge_softness_pixels: float = 0.75,
 ) -> torch.Tensor:
-    """Render oriented ellipse patches with pixel-scale soft hard edges."""
-    if base_rgb.ndim != 3 or base_rgb.shape[-1] != 3:
-        raise ValueError("base_rgb must have shape (H, W, 3)")
+    """Return one soft alpha map per oriented ellipse patch."""
+    width, height = image_size
     device = centers.device
     dtype = centers.dtype
-    height, width, _ = base_rgb.shape
-
     ys = torch.linspace(0.0, 1.0, height, device=device, dtype=dtype)
     xs = torch.linspace(0.0, 1.0, width, device=device, dtype=dtype)
     grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
@@ -168,5 +160,67 @@ def render_soft_ellipses(
     signed_distance = (1.0 - normalized_radius) * torch.minimum(rx, ry)
     pixel_softness = edge_softness_pixels / max(min(height, width) - 1, 1)
     coverage = torch.sigmoid(signed_distance / pixel_softness)
-    alpha = torch.clamp(opacities[:, None, None] * coverage, 0.0, 1.0)
+    return torch.clamp(opacities[:, None, None] * coverage, 0.0, 1.0)
+
+
+def render_soft_tapered_strokes(
+    p0: torch.Tensor,
+    p1: torch.Tensor,
+    p2: torch.Tensor,
+    width_start: torch.Tensor,
+    width_mid: torch.Tensor,
+    width_end: torch.Tensor,
+    colors: torch.Tensor,
+    opacities: torch.Tensor,
+    *,
+    base_rgb: torch.Tensor,
+    samples_per_curve: int = 24,
+    edge_softness_pixels: float = 0.75,
+) -> torch.Tensor:
+    """Render tapered Bezier strokes using near-raster hard-edge soft coverage."""
+    if base_rgb.ndim != 3 or base_rgb.shape[-1] != 3:
+        raise ValueError("base_rgb must have shape (H, W, 3)")
+    if samples_per_curve < 2:
+        raise ValueError("samples_per_curve must be at least 2")
+
+    height, width, _ = base_rgb.shape
+    alpha = soft_tapered_alpha_maps(
+        p0,
+        p1,
+        p2,
+        width_start,
+        width_mid,
+        width_end,
+        opacities,
+        image_size=(width, height),
+        samples_per_curve=samples_per_curve,
+        edge_softness_pixels=edge_softness_pixels,
+    )
+    return _ordered_composite(base_rgb, alpha, colors)
+
+
+def render_soft_ellipses(
+    centers: torch.Tensor,
+    radii_x: torch.Tensor,
+    radii_y: torch.Tensor,
+    angles: torch.Tensor,
+    colors: torch.Tensor,
+    opacities: torch.Tensor,
+    *,
+    base_rgb: torch.Tensor,
+    edge_softness_pixels: float = 0.75,
+) -> torch.Tensor:
+    """Render oriented ellipse patches with pixel-scale soft hard edges."""
+    if base_rgb.ndim != 3 or base_rgb.shape[-1] != 3:
+        raise ValueError("base_rgb must have shape (H, W, 3)")
+    height, width, _ = base_rgb.shape
+    alpha = soft_ellipse_alpha_maps(
+        centers,
+        radii_x,
+        radii_y,
+        angles,
+        opacities,
+        image_size=(width, height),
+        edge_softness_pixels=edge_softness_pixels,
+    )
     return _ordered_composite(base_rgb, alpha, colors)

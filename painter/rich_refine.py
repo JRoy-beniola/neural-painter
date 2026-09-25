@@ -12,8 +12,8 @@ from painter.diffrender import (
 from painter.refine import (
     RefinementStats,
     _objective_loss,
-    _resolve_device,
     _resize_rgb,
+    _resolve_device,
     _validate_refinement_args,
 )
 from painter.renderer import render_primitive_overlay, render_strokes

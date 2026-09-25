@@ -376,3 +376,28 @@ python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
   --optimized-stroke-count 512 \
   --geometry-bound 0.03
 ```
+
+
+### Geometry-safe cleanup
+
+The scheduled rich refiner now separates structure-stage and cleanup-stage
+controls. The recommended cleanup is appearance-focused: keep control-point
+geometry fixed while optimizing a small high-residual subset for MSE.
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round16/fleur_region_rich_safe_cleanup_2000 \
+  --budgets 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --method region_rich_refined_schedule \
+  --device cuda \
+  --optimized-stroke-count 256 \
+  --geometry-bound 0.02 \
+  --cleanup-stroke-count 64 \
+  --cleanup-geometry-bound 0.0
+```
+
+Use `--cleanup-optimize-geometry` only for explicit geometry-cleanup ablations.
+When enabled, `--cleanup-geometry-drift-weight` penalizes control-point drift
+from the structure-stage result.

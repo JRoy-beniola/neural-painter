@@ -15,7 +15,6 @@ from painter.palette import extract_palette
 from painter.renderer import render_strokes
 from painter.sampling import sample_gradient_strokes
 
-
 DEFAULT_BUDGETS = (100, 250, 500, 1000, 2000)
 
 

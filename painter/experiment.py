@@ -19,12 +19,15 @@ from painter.refine import (
 )
 from painter.renderer import render_strokes
 from painter.rich import paint_region_rich_residual, paint_rich_residual
-from painter.rich_refine import refine_region_rich_primitives_ordered
+from painter.rich_refine import (
+    refine_region_rich_primitives_ordered,
+    refine_region_rich_primitives_scheduled,
+)
 from painter.sampling import sample_gradient_strokes
 from painter.structured import paint_structured_residual
 
 DEFAULT_BUDGETS = (100, 250, 500, 1000, 2000)
-METHODS = ("static", "residual", "structured", "rich_residual", "region_rich_residual", "region_rich_refined", "region_rich_refined_structure", "refined", "refined_structure", "global_refined", "global_refined_structure", "staged_refined", "staged_refined_structure")
+METHODS = ("static", "residual", "structured", "rich_residual", "region_rich_residual", "region_rich_refined", "region_rich_refined_structure", "region_rich_refined_schedule", "refined", "refined_structure", "global_refined", "global_refined_structure", "staged_refined", "staged_refined_structure")
 
 
 def run_budget_experiment(
@@ -116,6 +119,18 @@ def run_budget_experiment(
                 device=device,
                 objective="structure",
                 max_refine_strokes=256 if optimized_stroke_count is None else optimized_stroke_count,
+                geometry_bound=geometry_bound,
+            )
+        elif method == "region_rich_refined_schedule":
+            stroke_batch = 512 if optimized_stroke_count is None else optimized_stroke_count
+            strokes, background, refinement = refine_region_rich_primitives_scheduled(
+                target_rgb,
+                palette,
+                budget,
+                seed=seed,
+                device=device,
+                structure_strokes=stroke_batch,
+                cleanup_strokes=stroke_batch,
                 geometry_bound=geometry_bound,
             )
         elif method == "refined":

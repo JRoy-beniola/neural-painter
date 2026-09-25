@@ -28,9 +28,9 @@ class StructuredPass:
 
 
 DEFAULT_STRUCTURED_PASSES = (
-    StructuredPass(0.20, 0.35, 0.060, 0.180, 0.018, 0.050, 0.160, 0.040),
-    StructuredPass(0.30, 0.45, 0.035, 0.120, 0.012, 0.035, 0.120, 0.028),
-    StructuredPass(0.50, 0.60, 0.015, 0.075, 0.007, 0.020, 0.080, 0.016),
+    StructuredPass(0.20, 0.25, 0.055, 0.160, 0.014, 0.055, 0.170, 0.045),
+    StructuredPass(0.30, 0.30, 0.030, 0.105, 0.010, 0.040, 0.130, 0.032),
+    StructuredPass(0.50, 0.20, 0.012, 0.060, 0.006, 0.025, 0.090, 0.020),
 )
 
 
@@ -48,7 +48,7 @@ def paint_structured_residual(
     total_strokes: int,
     *,
     seed: int = 0,
-    edge_power: float = 1.5,
+    edge_power: float = 1.8,
     residual_power: float = 1.0,
 ) -> tuple[list[Stroke], tuple[int, int, int]]:
     """Paint with explicit contour and smooth-interior stroke policies."""
@@ -95,7 +95,7 @@ def paint_structured_residual(
                     min_length=config.edge_min_length,
                     max_length=config.edge_max_length,
                     width=config.edge_width,
-                    opacity=0.90,
+                    opacity=0.62,
                 )
             )
 

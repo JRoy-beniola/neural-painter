@@ -28,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--geometry-bound", type=float, default=0.03)
     parser.add_argument("--continuous-color", action="store_true")
     parser.add_argument("--refinement-stages", type=int, default=4)
+    parser.add_argument("--refinement-sweeps", type=int, default=1)
     return parser.parse_args()
 
 
@@ -46,6 +47,7 @@ def main() -> None:
         geometry_bound=args.geometry_bound,
         continuous_color=args.continuous_color,
         refinement_stages=args.refinement_stages,
+        refinement_sweeps=args.refinement_sweeps,
     )
     print(json.dumps(report, indent=2))
 

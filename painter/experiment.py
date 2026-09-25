@@ -108,7 +108,7 @@ def run_budget_experiment(
                 geometry_bound=geometry_bound,
             )
         elif method == "region_rich_refined_structure":
-            strokes, background, refinement = refine_region_rich_primitives(
+            strokes, background, refinement = refine_region_rich_primitives_ordered(
                 target_rgb,
                 palette,
                 budget,

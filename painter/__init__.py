@@ -2,4 +2,4 @@
 
 from painter.stroke import RGB, Point, Stroke
 
-__all__ = ["Point", "RGB", "Stroke"]
+__all__ = ["RGB", "Point", "Stroke"]

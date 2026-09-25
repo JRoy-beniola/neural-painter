@@ -4,7 +4,7 @@ import pytest
 from PIL import Image
 
 from painter.renderer import render_strokes
-from painter.stroke import Stroke
+from painter.stroke import EllipsePatch, Stroke, TaperedStroke
 
 
 def horizontal_stroke(**overrides: object) -> Stroke:
@@ -69,3 +69,29 @@ def test_invalid_image_size_is_rejected(size: tuple[int, int]) -> None:
 def test_invalid_curve_sampling_is_rejected() -> None:
     with pytest.raises(ValueError):
         render_strokes([], size=(10, 10), samples_per_curve=1)
+
+
+def test_renderer_supports_tapered_strokes_and_patches() -> None:
+    patch = EllipsePatch(
+        center=(0.5, 0.5),
+        radius_x=0.2,
+        radius_y=0.1,
+        angle=0.4,
+        color=(0.0, 1.0, 0.0),
+        opacity=1.0,
+    )
+    stroke = TaperedStroke(
+        p0=(0.2, 0.5),
+        p1=(0.5, 0.3),
+        p2=(0.8, 0.5),
+        width_start=0.02,
+        width_mid=0.08,
+        width_end=0.02,
+        color=(1.0, 0.0, 0.0),
+        opacity=1.0,
+    )
+
+    image = render_strokes([patch, stroke], size=(100, 100))
+
+    center = image.getpixel((50, 40))
+    assert center != (255, 255, 255)

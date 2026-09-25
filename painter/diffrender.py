@@ -5,6 +5,20 @@ from __future__ import annotations
 import torch
 
 
+def _ordered_composite(
+    base_rgb: torch.Tensor,
+    alpha: torch.Tensor,
+    colors: torch.Tensor,
+) -> torch.Tensor:
+    """Alpha-composite primitives in program order like the raster renderer."""
+    canvas = base_rgb
+    for index in range(alpha.shape[0]):
+        a = alpha[index][..., None]
+        canvas = canvas * (1.0 - a) + colors[index][None, None, :] * a
+    return canvas
+
+
+
 def render_soft_strokes(
     p0: torch.Tensor,
     p1: torch.Tensor,
@@ -72,9 +86,10 @@ def render_soft_tapered_strokes(
     opacities: torch.Tensor,
     *,
     base_rgb: torch.Tensor,
-    samples_per_curve: int = 10,
+    samples_per_curve: int = 24,
+    edge_softness_pixels: float = 0.75,
 ) -> torch.Tensor:
-    """Render tapered quadratic Bezier strokes with differentiable soft coverage."""
+    """Render tapered Bezier strokes using near-raster hard-edge soft coverage."""
     if base_rgb.ndim != 3 or base_rgb.shape[-1] != 3:
         raise ValueError("base_rgb must have shape (H, W, 3)")
     if samples_per_curve < 2:
@@ -106,24 +121,16 @@ def render_soft_tapered_strokes(
         (1.0 - second_half[None, :]) * width_mid[:, None]
         + second_half[None, :] * width_end[:, None]
     )
-    sample_widths = torch.where(
-        t[None, :] <= 0.5,
-        widths_first,
-        widths_second,
-    )
+    sample_widths = torch.where(t[None, :] <= 0.5, widths_first, widths_second)
 
     diff = grid[None, :, :, None, :] - points[:, None, None, :, :]
-    distance_sq = torch.sum(diff * diff, dim=-1)
-    sigma = torch.clamp(sample_widths[:, None, None, :] * 0.5, min=1e-4)
-    sample_alpha = torch.exp(-distance_sq / (2.0 * sigma * sigma))
-    alpha = opacities[:, None, None] * sample_alpha.amax(dim=-1)
-    alpha = torch.clamp(alpha, 0.0, 0.98)
-
-    coverage = 1.0 - torch.prod(1.0 - alpha, dim=0)
-    weighted = torch.sum(alpha[..., None] * colors[:, None, None, :], dim=0)
-    weight_sum = torch.sum(alpha, dim=0)[..., None].clamp_min(1e-6)
-    stroke_rgb = weighted / weight_sum
-    return base_rgb * (1.0 - coverage[..., None]) + stroke_rgb * coverage[..., None]
+    distance = torch.sqrt(torch.sum(diff * diff, dim=-1) + 1e-10)
+    radius = 0.5 * sample_widths[:, None, None, :]
+    pixel_softness = edge_softness_pixels / max(min(height, width) - 1, 1)
+    sample_coverage = torch.sigmoid((radius - distance) / pixel_softness)
+    coverage = 1.0 - torch.prod(1.0 - sample_coverage, dim=-1)
+    alpha = torch.clamp(opacities[:, None, None] * coverage, 0.0, 1.0)
+    return _ordered_composite(base_rgb, alpha, colors)
 
 
 def render_soft_ellipses(
@@ -135,9 +142,9 @@ def render_soft_ellipses(
     opacities: torch.Tensor,
     *,
     base_rgb: torch.Tensor,
-    edge_softness: float = 0.025,
+    edge_softness_pixels: float = 0.75,
 ) -> torch.Tensor:
-    """Render oriented ellipse patches using a smooth signed-distance proxy."""
+    """Render oriented ellipse patches with pixel-scale soft hard edges."""
     if base_rgb.ndim != 3 or base_rgb.shape[-1] != 3:
         raise ValueError("base_rgb must have shape (H, W, 3)")
     device = centers.device
@@ -157,12 +164,9 @@ def render_soft_ellipses(
 
     rx = radii_x[:, None, None].clamp_min(1e-4)
     ry = radii_y[:, None, None].clamp_min(1e-4)
-    normalized_radius = torch.sqrt((local_x / rx) ** 2 + (local_y / ry) ** 2 + 1e-8)
-    coverage_each = torch.sigmoid((1.0 - normalized_radius) / edge_softness)
-    alpha = torch.clamp(opacities[:, None, None] * coverage_each, 0.0, 0.98)
-
-    coverage = 1.0 - torch.prod(1.0 - alpha, dim=0)
-    weighted = torch.sum(alpha[..., None] * colors[:, None, None, :], dim=0)
-    weight_sum = torch.sum(alpha, dim=0)[..., None].clamp_min(1e-6)
-    patch_rgb = weighted / weight_sum
-    return base_rgb * (1.0 - coverage[..., None]) + patch_rgb * coverage[..., None]
+    normalized_radius = torch.sqrt((local_x / rx) ** 2 + (local_y / ry) ** 2 + 1e-10)
+    signed_distance = (1.0 - normalized_radius) * torch.minimum(rx, ry)
+    pixel_softness = edge_softness_pixels / max(min(height, width) - 1, 1)
+    coverage = torch.sigmoid(signed_distance / pixel_softness)
+    alpha = torch.clamp(opacities[:, None, None] * coverage, 0.0, 1.0)
+    return _ordered_composite(base_rgb, alpha, colors)

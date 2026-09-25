@@ -6,7 +6,7 @@ Research prototype for **reference-conditioned, persistent stroke-space neural p
 
 Phase 0 tests whether an explicit stroke representation is a viable state space before introducing learned models.
 
-Two procedural methods are currently available:
+Several Phase 0 methods are available, including a differentiable refinement stage:
 
 ```text
 static baseline
@@ -78,9 +78,25 @@ Each experiment writes the target image, one reconstruction per stroke budget, a
 1. Procedural stroke renderer — implemented
 2. Fixed-budget gradient baseline — implemented
 3. Residual-driven image painting — implemented
-4. Differentiable stroke optimisation
+4. Differentiable local stroke refinement — implemented
 5. Reference-conditioned stroke policies
 6. Persistent stroke transport across video frames
 7. Learned real-time neural painter
 
 The central research hypothesis is that explicit persistent strokes can support reference-controlled mark-making and stronger temporal coherence than independent frame-wise repainting.
+
+
+## Differentiable refinement
+
+The `refined` method starts from the residual painter, selects strokes centered on the highest-error regions, and optimizes their control points, widths, colors, and opacities with PyTorch through a low-resolution differentiable soft rasterizer. Stroke count and ordering are preserved.
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/example.jpg \
+  --output-dir outputs/phase0_refined \
+  --budgets 100 250 500 1000 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --method refined
+```
+
+The refinement metadata stored in `metrics.json` includes the number of optimized strokes, optimization steps, and the initial/final differentiable loss.

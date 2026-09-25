@@ -77,7 +77,7 @@ def paint_structured_residual(
         residual = normalize_map(np.linalg.norm(image_rgb - current_rgb, axis=2))
         residual_term = np.power(residual, residual_power)
 
-        edge_count = int(round(count * config.edge_fraction))
+        edge_count = round(count * config.edge_fraction)
         edge_count = min(max(edge_count, 0), count)
         fill_count = count - edge_count
 

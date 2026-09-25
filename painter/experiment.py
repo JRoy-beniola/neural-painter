@@ -13,13 +13,13 @@ from painter.iterative import paint_residual
 from painter.metrics import reconstruction_metrics
 from painter.palette import extract_palette
 from painter.refine import (
-    refine_region_rich_primitives,
     refine_residual_strokes,
     refine_residual_strokes_global,
     refine_residual_strokes_staged,
 )
 from painter.renderer import render_strokes
 from painter.rich import paint_region_rich_residual, paint_rich_residual
+from painter.rich_refine import refine_region_rich_primitives_ordered
 from painter.sampling import sample_gradient_strokes
 from painter.structured import paint_structured_residual
 
@@ -97,7 +97,7 @@ def run_budget_experiment(
             )
             refinement = None
         elif method == "region_rich_refined":
-            strokes, background, refinement = refine_region_rich_primitives(
+            strokes, background, refinement = refine_region_rich_primitives_ordered(
                 target_rgb,
                 palette,
                 budget,

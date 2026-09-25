@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import numpy as np
-from sklearn.cluster import KMeans
 from skimage.color import lab2rgb, rgb2lab
+from sklearn.cluster import KMeans
 
 
 def extract_palette(image_rgb: np.ndarray, n_colors: int, *, random_state: int = 0) -> np.ndarray:

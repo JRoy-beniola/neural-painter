@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from painter.background import estimate_border_background
-from painter.iterative import _allocate_counts, _normalized_map
+from painter.iterative import PassConfig, allocate_pass_counts, normalize_map
 from painter.renderer import render_strokes
 from painter.sampling import gradient_magnitude, sample_fill_strokes, sample_gradient_strokes
 from painter.stroke import Stroke
@@ -35,13 +35,11 @@ DEFAULT_STRUCTURED_PASSES = (
 
 
 def _pass_counts(total_strokes: int) -> list[int]:
-    from painter.iterative import PassConfig
-
     proxy = tuple(
         PassConfig(config.fraction, 0.01, 0.02, 0.01, 1.0)
         for config in DEFAULT_STRUCTURED_PASSES
     )
-    return _allocate_counts(total_strokes, proxy)
+    return allocate_pass_counts(total_strokes, proxy)
 
 
 def paint_structured_residual(
@@ -63,7 +61,7 @@ def paint_structured_residual(
 
     h, w, _ = image_rgb.shape
     background = estimate_border_background(image_rgb)
-    edge_strength = _normalized_map(gradient_magnitude(image_rgb))
+    edge_strength = normalize_map(gradient_magnitude(image_rgb))
     counts = _pass_counts(total_strokes)
 
     strokes: list[Stroke] = []
@@ -76,7 +74,7 @@ def paint_structured_residual(
 
         current = render_strokes(strokes, size=(w, h), background=background)
         current_rgb = np.asarray(current, dtype=np.float32) / 255.0
-        residual = _normalized_map(np.linalg.norm(image_rgb - current_rgb, axis=2))
+        residual = normalize_map(np.linalg.norm(image_rgb - current_rgb, axis=2))
         residual_term = np.power(residual, residual_power)
 
         edge_count = int(round(count * config.edge_fraction))

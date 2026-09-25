@@ -5,7 +5,7 @@ import json
 import numpy as np
 from PIL import Image
 
-from scripts.run_budget_experiment import run_experiment
+from painter.experiment import run_budget_experiment
 
 
 def test_budget_experiment_writes_expected_artifacts(tmp_path) -> None:
@@ -17,7 +17,7 @@ def test_budget_experiment_writes_expected_artifacts(tmp_path) -> None:
     output_dir = tmp_path / "run"
     Image.fromarray(image, mode="RGB").save(input_path)
 
-    report = run_experiment(
+    report = run_budget_experiment(
         input_path,
         output_dir,
         palette_size=2,

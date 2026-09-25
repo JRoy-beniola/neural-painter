@@ -288,3 +288,28 @@ python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
 
 This directly tests whether the poor first rich-painter result came from the
 primitive vocabulary or from uninformed patch placement.
+
+
+### Rich differentiable refinement
+
+The `region_rich_refined` and `region_rich_refined_structure` methods start
+from the region-fitted rich representation and optimize both primitive families.
+
+Ellipse patches optimize bounded center motion, radii, angle, continuous RGB,
+and opacity. Tapered strokes optimize bounded Bezier control-point motion,
+start/middle/end widths, continuous RGB, and opacity.
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round10/fleur_region_rich_refined_2000 \
+  --budgets 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --method region_rich_refined_structure \
+  --device cuda \
+  --optimized-stroke-count 256 \
+  --geometry-bound 0.03
+```
+
+This tests whether the richer primitive vocabulary can surpass the old
+constant-width representation once both receive differentiable optimization.

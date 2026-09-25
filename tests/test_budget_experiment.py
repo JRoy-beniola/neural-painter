@@ -80,3 +80,30 @@ def test_refined_budget_experiment_records_refinement_metadata(tmp_path) -> None
     assert refinement["refined_strokes"] == 4
     assert refinement["final_loss"] <= refinement["initial_loss"]
     assert (output_dir / "painted_4.png").exists()
+
+
+def test_global_refined_budget_experiment_records_capacity_audit_metadata(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "global_refined"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=7,
+        budgets=[4],
+        method="global_refined",
+        optimized_stroke_count=3,
+        optimize_geometry=True,
+        geometry_bound=0.02,
+        continuous_color=True,
+    )
+
+    assert report["method"] == "global_refined"
+    refinement = report["runs"][0]["refinement"]
+    assert refinement["refined_strokes"] == 3
+    assert refinement["optimize_geometry"] is True
+    assert refinement["geometry_bound"] == 0.02
+    assert refinement["continuous_color"] is True
+    assert refinement["final_loss"] <= refinement["initial_loss"]

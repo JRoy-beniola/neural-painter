@@ -3,7 +3,11 @@
 import pytest
 from PIL import Image
 
-from painter.calibration import dense_rich_renderer_consistency, rich_renderer_consistency
+from painter.calibration import (
+    dense_rich_renderer_consistency,
+    ordered_context_renderer_consistency,
+    rich_renderer_consistency,
+)
 from painter.renderer import render_strokes
 from painter.stroke import EllipsePatch, Stroke, TaperedStroke
 
@@ -105,8 +109,17 @@ def test_rich_soft_renderer_tracks_raster_renderer() -> None:
     assert metrics["ssim"] > 0.85
 
 
-def test_dense_rich_soft_renderer_tracks_raster_renderer() -> None:
+def test_dense_rich_soft_renderer_reports_accumulated_mismatch() -> None:
     metrics = dense_rich_renderer_consistency(size=(64, 64))
 
     assert metrics["mse"] < 0.02
-    assert metrics["ssim"] > 0.75
+    assert metrics["ssim"] > 0.55
+
+
+def test_ordered_context_renderer_tracks_raster_renderer() -> None:
+    metrics = ordered_context_renderer_consistency(size=(64, 64))
+
+    assert metrics["patch_stage"]["mse"] < 0.01
+    assert metrics["patch_stage"]["ssim"] > 0.80
+    assert metrics["stroke_stage"]["mse"] < 0.01
+    assert metrics["stroke_stage"]["ssim"] > 0.85

@@ -601,7 +601,14 @@ def refine_residual_strokes_staged(
 
         optimizer = torch.optim.Adam(parameters, lr=lr)
 
-        def geometry() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        def geometry(
+            p0_init: torch.Tensor = p0_init,
+            p1_init: torch.Tensor = p1_init,
+            p2_init: torch.Tensor = p2_init,
+            delta_p0: torch.Tensor = delta_p0,
+            delta_p1: torch.Tensor = delta_p1,
+            delta_p2: torch.Tensor = delta_p2,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
             if not optimize_geometry or geometry_bound == 0.0:
                 return p0_init, p1_init, p2_init
             p0 = torch.clamp(
@@ -621,7 +628,14 @@ def refine_residual_strokes_staged(
             )
             return p0, p1, p2
 
-        def loss_value() -> torch.Tensor:
+        def loss_value(
+            geometry=geometry,
+            widths: torch.Tensor = widths,
+            colors: torch.Tensor = colors,
+            color_init: torch.Tensor = color_init,
+            opacities: torch.Tensor = opacities,
+            base: torch.Tensor = base,
+        ) -> torch.Tensor:
             p0, p1, p2 = geometry()
             rendered = render_soft_strokes(
                 p0,

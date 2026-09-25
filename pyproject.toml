@@ -16,6 +16,9 @@ dependencies = [
 dev = [
     "pytest",
     "ruff",
+]
+
+refine = [
     "torch",
 ]
 

@@ -75,6 +75,8 @@ def refine_region_rich_primitives_ordered(
     ssim_weight: float = 0.20,
     edge_weight: float = 0.10,
     geometry_bound: float = 0.03,
+    optimize_geometry: bool = True,
+    geometry_drift_weight: float = 0.0,
     initial_primitives: list[Primitive] | None = None,
     initial_background: tuple[int, int, int] | None = None,
 ) -> tuple[list[Primitive], tuple[int, int, int], RefinementStats]:
@@ -91,6 +93,8 @@ def refine_region_rich_primitives_ordered(
         raise ValueError("max_refine_strokes must be positive")
     if not 0.0 <= geometry_bound <= 1.0:
         raise ValueError("geometry_bound must lie in [0, 1]")
+    if geometry_drift_weight < 0.0:
+        raise ValueError("geometry_drift_weight must be non-negative")
 
     if initial_primitives is None:
         primitives, background = paint_region_rich_residual(
@@ -144,51 +148,74 @@ def refine_region_rich_primitives_ordered(
             device=torch_device,
         )
         center_delta = torch.nn.Parameter(torch.zeros_like(centers_init))
-        radii_x = torch.nn.Parameter(
-            torch.tensor([patch.radius_x for patch in patches], dtype=dtype, device=torch_device)
+        radii_x_init = torch.tensor(
+            [patch.radius_x for patch in patches],
+            dtype=dtype,
+            device=torch_device,
         )
-        radii_y = torch.nn.Parameter(
-            torch.tensor([patch.radius_y for patch in patches], dtype=dtype, device=torch_device)
+        radii_y_init = torch.tensor(
+            [patch.radius_y for patch in patches],
+            dtype=dtype,
+            device=torch_device,
         )
-        angles = torch.nn.Parameter(
-            torch.tensor([patch.angle for patch in patches], dtype=dtype, device=torch_device)
+        angles_init = torch.tensor(
+            [patch.angle for patch in patches],
+            dtype=dtype,
+            device=torch_device,
         )
+        radii_x = torch.nn.Parameter(radii_x_init.clone())
+        radii_y = torch.nn.Parameter(radii_y_init.clone())
+        angles = torch.nn.Parameter(angles_init.clone())
         colors = torch.nn.Parameter(
             torch.tensor([patch.color for patch in patches], dtype=dtype, device=torch_device)
         )
         opacities = torch.nn.Parameter(
             torch.tensor([patch.opacity for patch in patches], dtype=dtype, device=torch_device)
         )
-        optimizer = torch.optim.Adam(
-            [center_delta, radii_x, radii_y, angles, colors, opacities],
-            lr=lr,
-        )
+        patch_parameters: list[torch.nn.Parameter] = [colors, opacities]
+        if optimize_geometry:
+            patch_parameters.extend([center_delta, radii_x, radii_y, angles])
+        optimizer = torch.optim.Adam(patch_parameters, lr=lr)
 
-        def patch_geometry() -> torch.Tensor:
-            return torch.clamp(
+        def patch_geometry() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            if not optimize_geometry:
+                return centers_init, radii_x_init, radii_y_init, angles_init
+            centers = torch.clamp(
                 centers_init + geometry_bound * torch.tanh(center_delta),
                 0.0,
                 1.0,
             )
+            return centers, radii_x, radii_y, angles
 
         def patch_loss() -> torch.Tensor:
+            centers, patch_rx, patch_ry, patch_angles = patch_geometry()
             canvas = render_soft_ellipses(
-                patch_geometry(),
-                radii_x,
-                radii_y,
-                angles,
+                centers,
+                patch_rx,
+                patch_ry,
+                patch_angles,
                 colors,
                 opacities,
                 base_rgb=background_tensor,
             )
             canvas = _apply_affine(canvas, suffix_transform)
-            return _objective_loss(
+            loss = _objective_loss(
                 canvas,
                 target,
                 objective=objective,
                 ssim_weight=ssim_weight,
                 edge_weight=edge_weight,
             )
+            if optimize_geometry and geometry_drift_weight > 0.0:
+                centers, patch_rx, patch_ry, patch_angles = patch_geometry()
+                drift = (
+                    torch.mean((centers - centers_init) ** 2)
+                    + torch.mean((patch_rx - radii_x_init) ** 2)
+                    + torch.mean((patch_ry - radii_y_init) ** 2)
+                    + 0.05 * torch.mean((patch_angles - angles_init) ** 2)
+                )
+                loss = loss + geometry_drift_weight * drift
+            return loss
 
         with torch.no_grad():
             first_loss = float(patch_loss().item())
@@ -206,14 +233,14 @@ def refine_region_rich_primitives_ordered(
 
         with torch.no_grad():
             final_loss = float(patch_loss().item())
-            final_centers = patch_geometry()
+            final_centers, final_rx, final_ry, final_angles = patch_geometry()
 
         refined_patches = [
             EllipsePatch(
                 center=tuple(float(v) for v in final_centers[index].cpu().tolist()),
-                radius_x=float(radii_x[index].cpu().item()),
-                radius_y=float(radii_y[index].cpu().item()),
-                angle=float(angles[index].cpu().item()),
+                radius_x=float(final_rx[index].cpu().item()),
+                radius_y=float(final_ry[index].cpu().item()),
+                angle=float(final_angles[index].cpu().item()),
                 color=tuple(float(v) for v in colors[index].cpu().tolist()),
                 opacity=float(opacities[index].cpu().item()),
             )
@@ -304,21 +331,20 @@ def refine_region_rich_primitives_ordered(
         opacities = torch.nn.Parameter(
             torch.tensor([stroke.opacity for stroke in selected], dtype=dtype, device=torch_device)
         )
-        optimizer = torch.optim.Adam(
-            [
-                delta_p0,
-                delta_p1,
-                delta_p2,
-                width_start,
-                width_mid,
-                width_end,
-                colors,
-                opacities,
-            ],
-            lr=lr,
-        )
+        stroke_parameters: list[torch.nn.Parameter] = [
+            width_start,
+            width_mid,
+            width_end,
+            colors,
+            opacities,
+        ]
+        if optimize_geometry:
+            stroke_parameters.extend([delta_p0, delta_p1, delta_p2])
+        optimizer = torch.optim.Adam(stroke_parameters, lr=lr)
 
         def stroke_geometry() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            if not optimize_geometry:
+                return p0_init, p1_init, p2_init
             return (
                 torch.clamp(p0_init + geometry_bound * torch.tanh(delta_p0), 0.0, 1.0),
                 torch.clamp(p1_init + geometry_bound * torch.tanh(delta_p1), 0.0, 1.0),
@@ -347,13 +373,21 @@ def refine_region_rich_primitives_ordered(
                 canvas = canvas * (1.0 - alpha) + color * alpha
             canvas = _apply_affine(canvas, segment_transforms[-1])
 
-            return _objective_loss(
+            loss = _objective_loss(
                 canvas,
                 target,
                 objective=objective,
                 ssim_weight=ssim_weight,
                 edge_weight=edge_weight,
             )
+            if optimize_geometry and geometry_drift_weight > 0.0:
+                drift = (
+                    torch.mean((p0 - p0_init) ** 2)
+                    + torch.mean((p1 - p1_init) ** 2)
+                    + torch.mean((p2 - p2_init) ** 2)
+                )
+                loss = loss + geometry_drift_weight * drift
+            return loss
 
         if first_loss is None:
             with torch.no_grad():
@@ -395,7 +429,7 @@ def refine_region_rich_primitives_ordered(
         final_loss=final_loss,
         device=resolved_device,
         objective=objective,
-        optimize_geometry=True,
+        optimize_geometry=optimize_geometry,
         geometry_bound=geometry_bound,
         continuous_color=True,
     )
@@ -411,12 +445,15 @@ def refine_region_rich_primitives_scheduled(
     seed: int = 0,
     structure_steps: int = 30,
     cleanup_steps: int = 30,
-    structure_strokes: int = 512,
-    cleanup_strokes: int = 512,
+    structure_strokes: int = 256,
+    cleanup_strokes: int = 64,
     lr: float = 0.01,
     optimization_resolution: int = 96,
     device: str = "auto",
-    geometry_bound: float = 0.03,
+    structure_geometry_bound: float = 0.02,
+    cleanup_geometry_bound: float = 0.0,
+    cleanup_optimize_geometry: bool = False,
+    cleanup_geometry_drift_weight: float = 0.10,
 ) -> tuple[list[Primitive], tuple[int, int, int], RefinementStats]:
     """Run structure-first refinement followed by an MSE cleanup pass.
 
@@ -436,7 +473,8 @@ def refine_region_rich_primitives_scheduled(
         optimization_resolution=optimization_resolution,
         device=device,
         objective="structure",
-        geometry_bound=geometry_bound,
+        geometry_bound=structure_geometry_bound,
+        optimize_geometry=True,
     )
     second, background, second_stats = refine_region_rich_primitives_ordered(
         image_rgb,
@@ -449,7 +487,9 @@ def refine_region_rich_primitives_scheduled(
         optimization_resolution=optimization_resolution,
         device=device,
         objective="mse",
-        geometry_bound=geometry_bound,
+        geometry_bound=cleanup_geometry_bound,
+        optimize_geometry=cleanup_optimize_geometry,
+        geometry_drift_weight=cleanup_geometry_drift_weight,
         initial_primitives=first,
         initial_background=background,
     )
@@ -464,8 +504,8 @@ def refine_region_rich_primitives_scheduled(
         final_loss=second_stats.final_loss,
         device=second_stats.device,
         objective="structure_then_mse",
-        optimize_geometry=True,
-        geometry_bound=geometry_bound,
+        optimize_geometry=cleanup_optimize_geometry,
+        geometry_bound=cleanup_geometry_bound,
         continuous_color=True,
         stages=2,
         sweeps=1,

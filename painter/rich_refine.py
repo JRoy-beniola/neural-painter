@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from painter.diffrender import (
+    _ste_quantize_unit,
     render_soft_ellipses,
     soft_tapered_alpha_maps,
 )
@@ -328,10 +329,11 @@ def refine_region_rich_primitives_ordered(
             )
 
             canvas = base
+            raster_colors = _ste_quantize_unit(colors)
             for local_index in range(len(selected_indices)):
                 canvas = _apply_affine(canvas, segment_transforms[local_index])
                 alpha = alpha_maps[local_index][..., None]
-                color = colors[local_index][None, None, :]
+                color = raster_colors[local_index][None, None, :]
                 canvas = canvas * (1.0 - alpha) + color * alpha
             canvas = _apply_affine(canvas, segment_transforms[-1])
 

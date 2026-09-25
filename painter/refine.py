@@ -188,9 +188,9 @@ def refine_residual_strokes(
     for index in range(len(selected)):
         refined_selected.append(
             Stroke(
-                p0=tuple(float(v) for v in p0[index].detach().cpu().tolist()),
-                p1=tuple(float(v) for v in p1[index].detach().cpu().tolist()),
-                p2=tuple(float(v) for v in p2[index].detach().cpu().tolist()),
+                p0=selected[index].p0,
+                p1=selected[index].p1,
+                p2=selected[index].p2,
                 width=float(widths[index].detach().cpu().item()),
                 color=tuple(float(v) for v in colors[index].detach().cpu().tolist()),
                 opacity=float(opacities[index].detach().cpu().item()),

@@ -18,7 +18,7 @@ from painter.sampling import sample_gradient_strokes
 from painter.structured import paint_structured_residual
 
 DEFAULT_BUDGETS = (100, 250, 500, 1000, 2000)
-METHODS = ("static", "residual", "structured", "refined")
+METHODS = ("static", "residual", "structured", "refined", "refined_structure")
 
 
 def run_budget_experiment(
@@ -68,6 +68,15 @@ def run_budget_experiment(
                 seed=seed,
             )
             refinement = None
+        elif method == "refined":
+            strokes, background, refinement = refine_residual_strokes(
+                target_rgb,
+                palette,
+                budget,
+                seed=seed,
+                device=device,
+                objective="mse",
+            )
         else:
             strokes, background, refinement = refine_residual_strokes(
                 target_rgb,
@@ -75,6 +84,7 @@ def run_budget_experiment(
                 budget,
                 seed=seed,
                 device=device,
+                objective="structure",
             )
 
         painted = render_strokes(strokes, size=source.size, background=background)
@@ -99,6 +109,7 @@ def run_budget_experiment(
                 "initial_loss": refinement.initial_loss,
                 "final_loss": refinement.final_loss,
                 "device": refinement.device,
+                "objective": refinement.objective,
             }
         runs.append(run)
 

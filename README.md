@@ -37,6 +37,12 @@ The static method is preserved as the original baseline. The residual method add
 python -m pip install -e ".[dev]"
 ```
 
+For differentiable refinement:
+
+```bash
+python -m pip install -e ".[dev,refine]"
+```
+
 ## Single reconstruction
 
 ```bash

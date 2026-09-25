@@ -23,6 +23,7 @@ class RefinementStats:
     initial_loss: float
     final_loss: float
     device: str
+    objective: str
 
 
 def _stroke_center(stroke: Stroke) -> tuple[float, float]:
@@ -60,6 +61,47 @@ def _resize_rgb(image_rgb: np.ndarray, resolution: int) -> np.ndarray:
     return np.asarray(image, dtype=np.float32) / 255.0
 
 
+def _ssim_loss(rendered: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Differentiable local SSIM loss for HWC RGB tensors in [0, 1]."""
+    x = rendered.permute(2, 0, 1).unsqueeze(0)
+    y = target.permute(2, 0, 1).unsqueeze(0)
+    kernel = 7
+    padding = kernel // 2
+
+    mu_x = torch.nn.functional.avg_pool2d(x, kernel, stride=1, padding=padding)
+    mu_y = torch.nn.functional.avg_pool2d(y, kernel, stride=1, padding=padding)
+    sigma_x = torch.nn.functional.avg_pool2d(x * x, kernel, 1, padding) - mu_x * mu_x
+    sigma_y = torch.nn.functional.avg_pool2d(y * y, kernel, 1, padding) - mu_y * mu_y
+    sigma_xy = torch.nn.functional.avg_pool2d(x * y, kernel, 1, padding) - mu_x * mu_y
+
+    c1 = 0.01**2
+    c2 = 0.03**2
+    score = ((2.0 * mu_x * mu_y + c1) * (2.0 * sigma_xy + c2)) / (
+        (mu_x * mu_x + mu_y * mu_y + c1) * (sigma_x + sigma_y + c2)
+    )
+    return 1.0 - torch.clamp(score.mean(), 0.0, 1.0)
+
+
+def _edge_loss(rendered: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Match Sobel edge magnitude between rendered and target images."""
+    x = rendered.mean(dim=2)[None, None, :, :]
+    y = target.mean(dim=2)[None, None, :, :]
+
+    sobel_x = torch.tensor(
+        [[[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]]],
+        dtype=rendered.dtype,
+        device=rendered.device,
+    ).unsqueeze(0)
+    sobel_y = sobel_x.transpose(-1, -2)
+
+    def magnitude(image: torch.Tensor) -> torch.Tensor:
+        gx = torch.nn.functional.conv2d(image, sobel_x, padding=1)
+        gy = torch.nn.functional.conv2d(image, sobel_y, padding=1)
+        return torch.sqrt(gx * gx + gy * gy + 1e-8)
+
+    return torch.mean(torch.abs(magnitude(x) - magnitude(y)))
+
+
 def refine_residual_strokes(
     image_rgb: np.ndarray,
     palette: np.ndarray,
@@ -71,6 +113,9 @@ def refine_residual_strokes(
     max_refine_strokes: int = 12,
     optimization_resolution: int = 64,
     device: str = "auto",
+    objective: str = "mse",
+    ssim_weight: float = 0.20,
+    edge_weight: float = 0.10,
 ) -> tuple[list[Stroke], tuple[int, int, int], RefinementStats]:
     """Refine appearance parameters while keeping residual stroke geometry fixed.
 
@@ -85,6 +130,10 @@ def refine_residual_strokes(
         raise ValueError("lr must be positive")
     if optimization_resolution < 16:
         raise ValueError("optimization_resolution must be at least 16")
+    if objective not in {"mse", "structure"}:
+        raise ValueError("objective must be one of: mse, structure")
+    if ssim_weight < 0.0 or edge_weight < 0.0:
+        raise ValueError("structure loss weights must be non-negative")
 
     strokes, background = paint_residual(
         image_rgb,
@@ -165,7 +214,13 @@ def refine_residual_strokes(
             opacities,
             base_rgb=base,
         )
-        return torch.mean((rendered - target) ** 2)
+        mse = torch.mean((rendered - target) ** 2)
+        if objective == "mse":
+            return mse
+        return mse + ssim_weight * _ssim_loss(rendered, target) + edge_weight * _edge_loss(
+            rendered,
+            target,
+        )
 
     with torch.no_grad():
         initial_loss = float(loss_value().item())
@@ -207,5 +262,6 @@ def refine_residual_strokes(
         initial_loss=initial_loss,
         final_loss=final_loss,
         device=resolved_device,
+        objective=objective,
     )
     return refined_strokes, background, stats

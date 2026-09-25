@@ -1,4 +1,4 @@
-"""End-to-end smoke test for the Phase 0 budget experiment."""
+"""End-to-end smoke tests for the Phase 0 budget experiment."""
 
 import json
 
@@ -8,14 +8,16 @@ from PIL import Image
 from painter.experiment import run_budget_experiment
 
 
-def test_budget_experiment_writes_expected_artifacts(tmp_path) -> None:
-    image = np.zeros((16, 16, 3), dtype=np.uint8)
-    image[:, :8] = (30, 60, 200)
-    image[:, 8:] = (220, 180, 40)
+def _write_input(path) -> None:
+    image = np.zeros((24, 24, 3), dtype=np.uint8)
+    image[6:18, 6:18] = (180, 220, 250)
+    Image.fromarray(image, mode="RGB").save(path)
 
+
+def test_static_budget_experiment_writes_expected_artifacts(tmp_path) -> None:
     input_path = tmp_path / "input.png"
-    output_dir = tmp_path / "run"
-    Image.fromarray(image, mode="RGB").save(input_path)
+    output_dir = tmp_path / "static"
+    _write_input(input_path)
 
     report = run_budget_experiment(
         input_path,
@@ -23,8 +25,10 @@ def test_budget_experiment_writes_expected_artifacts(tmp_path) -> None:
         palette_size=2,
         seed=7,
         budgets=[3, 5],
+        method="static",
     )
 
+    assert report["method"] == "static"
     assert report["budgets"] == [3, 5]
     assert len(report["runs"]) == 2
     assert (output_dir / "target.png").exists()
@@ -34,4 +38,24 @@ def test_budget_experiment_writes_expected_artifacts(tmp_path) -> None:
 
     stored = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
     assert stored["seed"] == 7
+    assert stored["method"] == "static"
     assert [run["stroke_count"] for run in stored["runs"]] == [3, 5]
+
+
+def test_residual_budget_experiment_uses_estimated_background(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "residual"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=7,
+        budgets=[6],
+        method="residual",
+    )
+
+    assert report["method"] == "residual"
+    assert report["runs"][0]["background_rgb"] == [0, 0, 0]
+    assert (output_dir / "painted_6.png").exists()

@@ -17,6 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--budgets", type=int, nargs="+", default=list(DEFAULT_BUDGETS))
     parser.add_argument("--method", choices=METHODS, default="static")
+    parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
     return parser.parse_args()
 
 
@@ -29,6 +30,7 @@ def main() -> None:
         seed=args.seed,
         budgets=args.budgets,
         method=args.method,
+        device=args.device,
     )
     print(json.dumps(report, indent=2))
 

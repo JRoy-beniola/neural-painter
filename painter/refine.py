@@ -8,10 +8,15 @@ import numpy as np
 import torch
 from PIL import Image
 
-from painter.diffrender import render_soft_strokes
+from painter.diffrender import (
+    render_soft_ellipses,
+    render_soft_strokes,
+    render_soft_tapered_strokes,
+)
 from painter.iterative import paint_residual
+from painter.rich import paint_region_rich_residual
 from painter.renderer import render_strokes
-from painter.stroke import Stroke
+from painter.stroke import EllipsePatch, Primitive, Stroke, TaperedStroke
 
 
 @dataclass(frozen=True, slots=True)
@@ -734,3 +739,325 @@ def refine_residual_strokes_staged(
         sweeps=completed_sweeps,
     )
     return strokes, background, stats
+
+
+
+def refine_region_rich_primitives(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    total_primitives: int,
+    *,
+    seed: int = 0,
+    steps: int = 40,
+    lr: float = 0.01,
+    max_refine_strokes: int = 256,
+    optimization_resolution: int = 96,
+    device: str = "auto",
+    objective: str = "mse",
+    ssim_weight: float = 0.20,
+    edge_weight: float = 0.10,
+    geometry_bound: float = 0.03,
+) -> tuple[list[Primitive], tuple[int, int, int], RefinementStats]:
+    """Refine fitted ellipse patches and high-error tapered detail strokes."""
+    _validate_refinement_args(
+        steps=steps,
+        lr=lr,
+        optimization_resolution=optimization_resolution,
+        objective=objective,
+        ssim_weight=ssim_weight,
+        edge_weight=edge_weight,
+    )
+    if max_refine_strokes < 1:
+        raise ValueError("max_refine_strokes must be positive")
+    if geometry_bound < 0.0 or geometry_bound > 1.0:
+        raise ValueError("geometry_bound must lie in [0, 1]")
+
+    primitives, background = paint_region_rich_residual(
+        image_rgb,
+        palette,
+        total_primitives,
+        seed=seed,
+    )
+    patches = [primitive for primitive in primitives if isinstance(primitive, EllipsePatch)]
+    tapered = [primitive for primitive in primitives if isinstance(primitive, TaperedStroke)]
+
+    resolved_device = _resolve_device(device)
+    torch_device = torch.device(resolved_device)
+    dtype = torch.float32
+    target_small = _resize_rgb(image_rgb, optimization_resolution)
+    target = torch.tensor(target_small, dtype=dtype, device=torch_device)
+    height, width, _ = target_small.shape
+    background_rgb = np.empty_like(target_small, dtype=np.float32)
+    background_rgb[...] = np.asarray(background, dtype=np.float32) / 255.0
+    base_background = torch.tensor(background_rgb, dtype=dtype, device=torch_device)
+
+    first_loss: float | None = None
+    last_loss = 0.0
+    refined_count = 0
+
+    refined_patches = list(patches)
+    if patches:
+        centers_init = torch.tensor(
+            [patch.center for patch in patches],
+            dtype=dtype,
+            device=torch_device,
+        )
+        rx_init = torch.tensor(
+            [patch.radius_x for patch in patches],
+            dtype=dtype,
+            device=torch_device,
+        )
+        ry_init = torch.tensor(
+            [patch.radius_y for patch in patches],
+            dtype=dtype,
+            device=torch_device,
+        )
+        angle_init = torch.tensor(
+            [patch.angle for patch in patches],
+            dtype=dtype,
+            device=torch_device,
+        )
+        center_delta = torch.nn.Parameter(torch.zeros_like(centers_init))
+        rx = torch.nn.Parameter(rx_init.clone())
+        ry = torch.nn.Parameter(ry_init.clone())
+        angles = torch.nn.Parameter(angle_init.clone())
+        colors = torch.nn.Parameter(
+            torch.tensor(
+                [patch.color for patch in patches],
+                dtype=dtype,
+                device=torch_device,
+            )
+        )
+        opacities = torch.nn.Parameter(
+            torch.tensor(
+                [patch.opacity for patch in patches],
+                dtype=dtype,
+                device=torch_device,
+            )
+        )
+        optimizer = torch.optim.Adam([center_delta, rx, ry, angles, colors, opacities], lr=lr)
+
+        def patch_loss() -> torch.Tensor:
+            centers = torch.clamp(
+                centers_init + geometry_bound * torch.tanh(center_delta),
+                0.0,
+                1.0,
+            )
+            rendered = render_soft_ellipses(
+                centers,
+                rx,
+                ry,
+                angles,
+                colors,
+                opacities,
+                base_rgb=base_background,
+            )
+            return _objective_loss(
+                rendered,
+                target,
+                objective=objective,
+                ssim_weight=ssim_weight,
+                edge_weight=edge_weight,
+            )
+
+        with torch.no_grad():
+            first_loss = float(patch_loss().item())
+
+        for _ in range(steps):
+            optimizer.zero_grad()
+            loss = patch_loss()
+            loss.backward()
+            optimizer.step()
+            with torch.no_grad():
+                rx.clamp_(0.002, 0.20)
+                ry.clamp_(0.002, 0.20)
+                colors.clamp_(0.0, 1.0)
+                opacities.clamp_(0.20, 1.0)
+
+        with torch.no_grad():
+            last_loss = float(patch_loss().item())
+            final_centers = torch.clamp(
+                centers_init + geometry_bound * torch.tanh(center_delta),
+                0.0,
+                1.0,
+            )
+
+        refined_patches = [
+            EllipsePatch(
+                center=tuple(float(v) for v in final_centers[index].cpu().tolist()),
+                radius_x=float(rx[index].cpu().item()),
+                radius_y=float(ry[index].cpu().item()),
+                angle=float(angles[index].cpu().item()),
+                color=tuple(float(v) for v in colors[index].cpu().tolist()),
+                opacity=float(opacities[index].cpu().item()),
+            )
+            for index in range(len(patches))
+        ]
+        refined_count += len(refined_patches)
+
+    patch_canvas = render_strokes(
+        refined_patches,
+        size=(width, height),
+        background=background,
+    )
+    patch_rgb = np.asarray(patch_canvas, dtype=np.float32) / 255.0
+
+    refined_tapered = list(tapered)
+    if tapered:
+        current_full = render_strokes(
+            [*refined_patches, *tapered],
+            size=(image_rgb.shape[1], image_rgb.shape[0]),
+            background=background,
+        )
+        current_rgb = np.asarray(current_full, dtype=np.float32) / 255.0
+        residual = np.linalg.norm(image_rgb - current_rgb, axis=2)
+        full_h, full_w = residual.shape
+        scored: list[tuple[float, int]] = []
+        for index, stroke in enumerate(tapered):
+            cx, cy = stroke.point_at(0.5)
+            x = min(full_w - 1, max(0, round(cx * (full_w - 1))))
+            y = min(full_h - 1, max(0, round(cy * (full_h - 1))))
+            scored.append((float(residual[y, x]), index))
+        scored.sort(reverse=True)
+        selected_indices = sorted(
+            index for _, index in scored[: min(max_refine_strokes, len(tapered))]
+        )
+        selected_set = set(selected_indices)
+        fixed_tapered = [
+            stroke for index, stroke in enumerate(tapered) if index not in selected_set
+        ]
+        selected = [tapered[index] for index in selected_indices]
+
+        fixed_canvas = render_strokes(
+            [*refined_patches, *fixed_tapered],
+            size=(width, height),
+            background=background,
+        )
+        fixed_rgb = np.asarray(fixed_canvas, dtype=np.float32) / 255.0
+        base = torch.tensor(fixed_rgb, dtype=dtype, device=torch_device)
+
+        p0_init = torch.tensor([stroke.p0 for stroke in selected], dtype=dtype, device=torch_device)
+        p1_init = torch.tensor([stroke.p1 for stroke in selected], dtype=dtype, device=torch_device)
+        p2_init = torch.tensor([stroke.p2 for stroke in selected], dtype=dtype, device=torch_device)
+        delta_p0 = torch.nn.Parameter(torch.zeros_like(p0_init))
+        delta_p1 = torch.nn.Parameter(torch.zeros_like(p1_init))
+        delta_p2 = torch.nn.Parameter(torch.zeros_like(p2_init))
+        width_start = torch.nn.Parameter(
+            torch.tensor(
+                [stroke.width_start for stroke in selected],
+                dtype=dtype,
+                device=torch_device,
+            )
+        )
+        width_mid = torch.nn.Parameter(
+            torch.tensor(
+                [stroke.width_mid for stroke in selected],
+                dtype=dtype,
+                device=torch_device,
+            )
+        )
+        width_end = torch.nn.Parameter(
+            torch.tensor(
+                [stroke.width_end for stroke in selected],
+                dtype=dtype,
+                device=torch_device,
+            )
+        )
+        colors = torch.nn.Parameter(
+            torch.tensor([stroke.color for stroke in selected], dtype=dtype, device=torch_device)
+        )
+        opacities = torch.nn.Parameter(
+            torch.tensor(
+                [stroke.opacity for stroke in selected],
+                dtype=dtype,
+                device=torch_device,
+            )
+        )
+        optimizer = torch.optim.Adam(
+            [
+                delta_p0,
+                delta_p1,
+                delta_p2,
+                width_start,
+                width_mid,
+                width_end,
+                colors,
+                opacities,
+            ],
+            lr=lr,
+        )
+
+        def stroke_geometry() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            return (
+                torch.clamp(p0_init + geometry_bound * torch.tanh(delta_p0), 0.0, 1.0),
+                torch.clamp(p1_init + geometry_bound * torch.tanh(delta_p1), 0.0, 1.0),
+                torch.clamp(p2_init + geometry_bound * torch.tanh(delta_p2), 0.0, 1.0),
+            )
+
+        def stroke_loss() -> torch.Tensor:
+            p0, p1, p2 = stroke_geometry()
+            rendered = render_soft_tapered_strokes(
+                p0,
+                p1,
+                p2,
+                width_start,
+                width_mid,
+                width_end,
+                colors,
+                opacities,
+                base_rgb=base,
+            )
+            return _objective_loss(
+                rendered,
+                target,
+                objective=objective,
+                ssim_weight=ssim_weight,
+                edge_weight=edge_weight,
+            )
+
+        if first_loss is None:
+            with torch.no_grad():
+                first_loss = float(stroke_loss().item())
+
+        for _ in range(steps):
+            optimizer.zero_grad()
+            loss = stroke_loss()
+            loss.backward()
+            optimizer.step()
+            with torch.no_grad():
+                width_start.clamp_(0.001, 0.08)
+                width_mid.clamp_(0.001, 0.08)
+                width_end.clamp_(0.001, 0.08)
+                colors.clamp_(0.0, 1.0)
+                opacities.clamp_(0.20, 1.0)
+
+        with torch.no_grad():
+            last_loss = float(stroke_loss().item())
+            final_p0, final_p1, final_p2 = stroke_geometry()
+
+        for local_index, stroke_index in enumerate(selected_indices):
+            refined_tapered[stroke_index] = TaperedStroke(
+                p0=tuple(float(v) for v in final_p0[local_index].cpu().tolist()),
+                p1=tuple(float(v) for v in final_p1[local_index].cpu().tolist()),
+                p2=tuple(float(v) for v in final_p2[local_index].cpu().tolist()),
+                width_start=float(width_start[local_index].cpu().item()),
+                width_mid=float(width_mid[local_index].cpu().item()),
+                width_end=float(width_end[local_index].cpu().item()),
+                color=tuple(float(v) for v in colors[local_index].cpu().tolist()),
+                opacity=float(opacities[local_index].cpu().item()),
+            )
+        refined_count += len(selected_indices)
+
+    refined: list[Primitive] = [*refined_patches, *refined_tapered]
+    stats = RefinementStats(
+        refined_strokes=refined_count,
+        steps=steps * (2 if patches and tapered else 1),
+        initial_loss=0.0 if first_loss is None else first_loss,
+        final_loss=last_loss,
+        device=resolved_device,
+        objective=objective,
+        optimize_geometry=True,
+        geometry_bound=geometry_bound,
+        continuous_color=True,
+    )
+    return refined, background, stats

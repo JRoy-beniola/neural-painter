@@ -191,9 +191,9 @@ def refine_residual_strokes(
                 p0=selected[index].p0,
                 p1=selected[index].p1,
                 p2=selected[index].p2,
-                width=float(widths[index].detach().cpu().item()),
+                width=min(0.035, max(0.004, float(widths[index].detach().cpu().item()))),
                 color=tuple(float(v) for v in colors[index].detach().cpu().tolist()),
-                opacity=float(opacities[index].detach().cpu().item()),
+                opacity=min(0.95, max(0.35, float(opacities[index].detach().cpu().item()))),
             )
         )
 

@@ -220,3 +220,29 @@ def test_staged_refinement_stops_after_all_strokes_are_seen() -> None:
     assert len(strokes) == 5
     assert stats.refined_strokes == 5
     assert stats.stages == 3
+
+
+def test_staged_refinement_revisits_strokes_across_sweeps() -> None:
+    image = np.zeros((20, 20, 3), dtype=np.float32)
+    image[4:16, 4:16] = (0.35, 0.65, 0.9)
+    palette = extract_palette(image, 2, random_state=0)
+
+    strokes, _, stats = refine_residual_strokes_staged(
+        image,
+        palette,
+        6,
+        seed=10,
+        stages=3,
+        sweeps=2,
+        batch_size=2,
+        steps_per_stage=1,
+        optimization_resolution=20,
+        optimize_geometry=False,
+        continuous_color=False,
+    )
+
+    assert len(strokes) == 6
+    assert stats.refined_strokes == 6
+    assert stats.stages == 6
+    assert stats.sweeps == 2
+    assert stats.steps == 6

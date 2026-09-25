@@ -3,7 +3,7 @@
 import pytest
 from PIL import Image
 
-from painter.calibration import rich_renderer_consistency
+from painter.calibration import dense_rich_renderer_consistency, rich_renderer_consistency
 from painter.renderer import render_strokes
 from painter.stroke import EllipsePatch, Stroke, TaperedStroke
 
@@ -103,3 +103,10 @@ def test_rich_soft_renderer_tracks_raster_renderer() -> None:
 
     assert metrics["mse"] < 0.01
     assert metrics["ssim"] > 0.85
+
+
+def test_dense_rich_soft_renderer_tracks_raster_renderer() -> None:
+    metrics = dense_rich_renderer_consistency(size=(64, 64))
+
+    assert metrics["mse"] < 0.02
+    assert metrics["ssim"] > 0.75

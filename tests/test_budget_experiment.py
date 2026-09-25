@@ -264,3 +264,30 @@ def test_region_rich_refined_schedule_records_two_stage_metadata(tmp_path) -> No
     assert refinement["stages"] == 2
     assert refinement["steps"] > 0
     assert (output_dir / "painted_8.png").exists()
+
+
+def test_region_rich_refined_schedule_can_disable_cleanup_geometry(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "region_rich_safe_cleanup"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=17,
+        budgets=[8],
+        method="region_rich_refined_schedule",
+        optimized_stroke_count=3,
+        geometry_bound=0.02,
+        cleanup_stroke_count=2,
+        cleanup_geometry_bound=0.0,
+        cleanup_optimize_geometry=False,
+        cleanup_geometry_drift_weight=0.1,
+    )
+
+    refinement = report["runs"][0]["refinement"]
+    assert refinement["objective"] == "structure_then_mse"
+    assert refinement["stages"] == 2
+    assert refinement["optimize_geometry"] is False
+    assert refinement["geometry_bound"] == 0.0

@@ -219,3 +219,25 @@ def test_region_rich_refined_budget_experiment_records_metadata(tmp_path) -> Non
     refinement = report["runs"][0]["refinement"]
     assert refinement["refined_strokes"] >= 1
     assert refinement["final_loss"] <= refinement["initial_loss"]
+
+
+def test_region_rich_refined_structure_ordered_smoke(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "region_rich_ordered"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=11,
+        budgets=[8],
+        method="region_rich_refined_structure",
+        optimized_stroke_count=3,
+        geometry_bound=0.02,
+    )
+
+    refinement = report["runs"][0]["refinement"]
+    assert refinement["refined_strokes"] >= 1
+    assert refinement["final_loss"] <= refinement["initial_loss"]
+    assert (output_dir / "painted_8.png").exists()

@@ -58,3 +58,111 @@ def render_soft_strokes(
     stroke_rgb = weighted / weight_sum
 
     return base_rgb * (1.0 - coverage[..., None]) + stroke_rgb * coverage[..., None]
+
+
+
+def render_soft_tapered_strokes(
+    p0: torch.Tensor,
+    p1: torch.Tensor,
+    p2: torch.Tensor,
+    width_start: torch.Tensor,
+    width_mid: torch.Tensor,
+    width_end: torch.Tensor,
+    colors: torch.Tensor,
+    opacities: torch.Tensor,
+    *,
+    base_rgb: torch.Tensor,
+    samples_per_curve: int = 10,
+) -> torch.Tensor:
+    """Render tapered quadratic Bezier strokes with differentiable soft coverage."""
+    if base_rgb.ndim != 3 or base_rgb.shape[-1] != 3:
+        raise ValueError("base_rgb must have shape (H, W, 3)")
+    if samples_per_curve < 2:
+        raise ValueError("samples_per_curve must be at least 2")
+
+    device = p0.device
+    dtype = p0.dtype
+    height, width, _ = base_rgb.shape
+    ys = torch.linspace(0.0, 1.0, height, device=device, dtype=dtype)
+    xs = torch.linspace(0.0, 1.0, width, device=device, dtype=dtype)
+    grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
+    grid = torch.stack((grid_x, grid_y), dim=-1)
+
+    t = torch.linspace(0.0, 1.0, samples_per_curve, device=device, dtype=dtype)
+    omt = 1.0 - t
+    points = (
+        omt[None, :, None] ** 2 * p0[:, None, :]
+        + 2.0 * omt[None, :, None] * t[None, :, None] * p1[:, None, :]
+        + t[None, :, None] ** 2 * p2[:, None, :]
+    )
+
+    first_half = torch.clamp(t * 2.0, 0.0, 1.0)
+    second_half = torch.clamp((t - 0.5) * 2.0, 0.0, 1.0)
+    widths_first = (
+        (1.0 - first_half[None, :]) * width_start[:, None]
+        + first_half[None, :] * width_mid[:, None]
+    )
+    widths_second = (
+        (1.0 - second_half[None, :]) * width_mid[:, None]
+        + second_half[None, :] * width_end[:, None]
+    )
+    sample_widths = torch.where(
+        t[None, :] <= 0.5,
+        widths_first,
+        widths_second,
+    )
+
+    diff = grid[None, :, :, None, :] - points[:, None, None, :, :]
+    distance_sq = torch.sum(diff * diff, dim=-1)
+    sigma = torch.clamp(sample_widths[:, None, None, :] * 0.5, min=1e-4)
+    sample_alpha = torch.exp(-distance_sq / (2.0 * sigma * sigma))
+    alpha = opacities[:, None, None] * sample_alpha.amax(dim=-1)
+    alpha = torch.clamp(alpha, 0.0, 0.98)
+
+    coverage = 1.0 - torch.prod(1.0 - alpha, dim=0)
+    weighted = torch.sum(alpha[..., None] * colors[:, None, None, :], dim=0)
+    weight_sum = torch.sum(alpha, dim=0)[..., None].clamp_min(1e-6)
+    stroke_rgb = weighted / weight_sum
+    return base_rgb * (1.0 - coverage[..., None]) + stroke_rgb * coverage[..., None]
+
+
+def render_soft_ellipses(
+    centers: torch.Tensor,
+    radii_x: torch.Tensor,
+    radii_y: torch.Tensor,
+    angles: torch.Tensor,
+    colors: torch.Tensor,
+    opacities: torch.Tensor,
+    *,
+    base_rgb: torch.Tensor,
+    edge_softness: float = 0.025,
+) -> torch.Tensor:
+    """Render oriented ellipse patches using a smooth signed-distance proxy."""
+    if base_rgb.ndim != 3 or base_rgb.shape[-1] != 3:
+        raise ValueError("base_rgb must have shape (H, W, 3)")
+    device = centers.device
+    dtype = centers.dtype
+    height, width, _ = base_rgb.shape
+
+    ys = torch.linspace(0.0, 1.0, height, device=device, dtype=dtype)
+    xs = torch.linspace(0.0, 1.0, width, device=device, dtype=dtype)
+    grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
+    dx = grid_x[None, :, :] - centers[:, 0, None, None]
+    dy = grid_y[None, :, :] - centers[:, 1, None, None]
+
+    cos_a = torch.cos(angles)[:, None, None]
+    sin_a = torch.sin(angles)[:, None, None]
+    local_x = cos_a * dx + sin_a * dy
+    local_y = -sin_a * dx + cos_a * dy
+
+    rx = radii_x[:, None, None].clamp_min(1e-4)
+    ry = radii_y[:, None, None].clamp_min(1e-4)
+    normalized_radius = torch.sqrt((local_x / rx) ** 2 + (local_y / ry) ** 2 + 1e-8)
+    coverage_each = torch.sigmoid((1.0 - normalized_radius) / edge_softness)
+    alpha = torch.clamp(opacities[:, None, None] * coverage_each, 0.0, 0.98)
+
+    coverage = 1.0 - torch.prod(1.0 - alpha, dim=0)
+    weighted = torch.sum(alpha[..., None] * colors[:, None, None, :], dim=0)
+    weight_sum = torch.sum(alpha, dim=0)[..., None].clamp_min(1e-6)
+    patch_rgb = weighted / weight_sum
+    return base_rgb * (1.0 - coverage[..., None]) + patch_rgb * coverage[..., None]

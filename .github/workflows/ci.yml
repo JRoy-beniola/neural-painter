@@ -16,7 +16,10 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install
+      - name: Install CPU PyTorch
+        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install project
         run: python -m pip install -e ".[dev]"
 
       - name: Ruff

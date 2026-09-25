@@ -75,6 +75,8 @@ def refine_region_rich_primitives_ordered(
     ssim_weight: float = 0.20,
     edge_weight: float = 0.10,
     geometry_bound: float = 0.03,
+    initial_primitives: list[Primitive] | None = None,
+    initial_background: tuple[int, int, int] | None = None,
 ) -> tuple[list[Primitive], tuple[int, int, int], RefinementStats]:
     """Refine rich primitives while preserving the full ordered program context."""
     _validate_refinement_args(
@@ -90,12 +92,20 @@ def refine_region_rich_primitives_ordered(
     if not 0.0 <= geometry_bound <= 1.0:
         raise ValueError("geometry_bound must lie in [0, 1]")
 
-    primitives, background = paint_region_rich_residual(
-        image_rgb,
-        palette,
-        total_primitives,
-        seed=seed,
-    )
+    if initial_primitives is None:
+        primitives, background = paint_region_rich_residual(
+            image_rgb,
+            palette,
+            total_primitives,
+            seed=seed,
+        )
+    else:
+        if len(initial_primitives) != total_primitives:
+            raise ValueError("initial_primitives must match total_primitives")
+        primitives = list(initial_primitives)
+        if initial_background is None:
+            raise ValueError("initial_background is required with initial_primitives")
+        background = initial_background
     patches = [primitive for primitive in primitives if isinstance(primitive, EllipsePatch)]
     tapered = [primitive for primitive in primitives if isinstance(primitive, TaperedStroke)]
 
@@ -390,3 +400,74 @@ def refine_region_rich_primitives_ordered(
         continuous_color=True,
     )
     return [*refined_patches, *refined_tapered], background, stats
+
+
+
+def refine_region_rich_primitives_scheduled(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    total_primitives: int,
+    *,
+    seed: int = 0,
+    structure_steps: int = 30,
+    cleanup_steps: int = 30,
+    structure_strokes: int = 512,
+    cleanup_strokes: int = 512,
+    lr: float = 0.01,
+    optimization_resolution: int = 96,
+    device: str = "auto",
+    geometry_bound: float = 0.03,
+) -> tuple[list[Primitive], tuple[int, int, int], RefinementStats]:
+    """Run structure-first refinement followed by an MSE cleanup pass.
+
+    The first pass prioritizes silhouette/edge coherence over a larger subset of
+    high-residual tapered strokes. The second pass starts from that updated
+    program, recomputes residuals, and optimizes another large subset for
+    pixelwise fidelity.
+    """
+    first, background, first_stats = refine_region_rich_primitives_ordered(
+        image_rgb,
+        palette,
+        total_primitives,
+        seed=seed,
+        steps=structure_steps,
+        lr=lr,
+        max_refine_strokes=structure_strokes,
+        optimization_resolution=optimization_resolution,
+        device=device,
+        objective="structure",
+        geometry_bound=geometry_bound,
+    )
+    second, background, second_stats = refine_region_rich_primitives_ordered(
+        image_rgb,
+        palette,
+        total_primitives,
+        seed=seed,
+        steps=cleanup_steps,
+        lr=lr,
+        max_refine_strokes=cleanup_strokes,
+        optimization_resolution=optimization_resolution,
+        device=device,
+        objective="mse",
+        geometry_bound=geometry_bound,
+        initial_primitives=first,
+        initial_background=background,
+    )
+
+    stats = RefinementStats(
+        refined_strokes=min(
+            total_primitives,
+            first_stats.refined_strokes + second_stats.refined_strokes,
+        ),
+        steps=first_stats.steps + second_stats.steps,
+        initial_loss=first_stats.initial_loss,
+        final_loss=second_stats.final_loss,
+        device=second_stats.device,
+        objective="structure_then_mse",
+        optimize_geometry=True,
+        geometry_bound=geometry_bound,
+        continuous_color=True,
+        stages=2,
+        sweeps=1,
+    )
+    return second, background, stats

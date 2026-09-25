@@ -28,6 +28,7 @@ class RefinementStats:
     geometry_bound: float = 0.0
     continuous_color: bool = True
     stages: int = 1
+    sweeps: int = 1
 
 
 def _stroke_center(stroke: Stroke) -> tuple[float, float]:
@@ -466,6 +467,7 @@ def refine_residual_strokes_staged(
     *,
     seed: int = 0,
     stages: int = 4,
+    sweeps: int = 1,
     batch_size: int = 256,
     steps_per_stage: int = 40,
     lr: float = 0.01,
@@ -495,6 +497,8 @@ def refine_residual_strokes_staged(
     )
     if stages < 1:
         raise ValueError("stages must be positive")
+    if sweeps < 1:
+        raise ValueError("sweeps must be positive")
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
     if geometry_bound < 0.0 or geometry_bound > 1.0:
@@ -509,196 +513,215 @@ def refine_residual_strokes_staged(
     target = torch.tensor(target_small, dtype=dtype, device=torch_device)
     opt_height, opt_width, _ = target_small.shape
 
-    refined_indices: set[int] = set()
+    all_refined_indices: set[int] = set()
     first_loss: float | None = None
     last_loss = 0.0
     completed_stages = 0
+    completed_sweeps = 0
 
-    for _ in range(stages):
-        if len(refined_indices) >= len(strokes):
-            break
+    for _sweep in range(sweeps):
+        refined_this_sweep: set[int] = set()
+        sweep_stages = 0
 
-        current_full = render_strokes(
-            strokes,
-            size=(image_rgb.shape[1], image_rgb.shape[0]),
-            background=background,
-        )
-        current_rgb = np.asarray(current_full, dtype=np.float32) / 255.0
-        residual = np.linalg.norm(image_rgb - current_rgb, axis=2)
-        height, width = residual.shape
+        for _stage in range(stages):
+            if len(refined_this_sweep) >= len(strokes):
+                break
 
-        scored: list[tuple[float, int]] = []
-        for index, stroke in enumerate(strokes):
-            if index in refined_indices:
-                continue
-            cx, cy = _stroke_center(stroke)
-            x = min(width - 1, max(0, round(cx * (width - 1))))
-            y = min(height - 1, max(0, round(cy * (height - 1))))
-            scored.append((float(residual[y, x]), index))
-
-        scored.sort(reverse=True)
-        selected_indices = sorted(index for _, index in scored[:batch_size])
-        if not selected_indices:
-            break
-
-        selected_set = set(selected_indices)
-        fixed_strokes = [
-            stroke for index, stroke in enumerate(strokes) if index not in selected_set
-        ]
-        selected = [strokes[index] for index in selected_indices]
-
-        fixed_base = render_strokes(
-            fixed_strokes,
-            size=(opt_width, opt_height),
-            background=background,
-        )
-        base_rgb = np.asarray(fixed_base, dtype=np.float32) / 255.0
-        base = torch.tensor(base_rgb, dtype=dtype, device=torch_device)
-
-        p0_init = torch.tensor(
-            [stroke.p0 for stroke in selected],
-            dtype=dtype,
-            device=torch_device,
-        )
-        p1_init = torch.tensor(
-            [stroke.p1 for stroke in selected],
-            dtype=dtype,
-            device=torch_device,
-        )
-        p2_init = torch.tensor(
-            [stroke.p2 for stroke in selected],
-            dtype=dtype,
-            device=torch_device,
-        )
-        width_init = torch.tensor(
-            [stroke.width for stroke in selected],
-            dtype=dtype,
-            device=torch_device,
-        )
-        color_init = torch.tensor(
-            [stroke.color for stroke in selected],
-            dtype=dtype,
-            device=torch_device,
-        )
-        opacity_init = torch.tensor(
-            [stroke.opacity for stroke in selected],
-            dtype=dtype,
-            device=torch_device,
-        )
-
-        delta_p0 = torch.nn.Parameter(torch.zeros_like(p0_init))
-        delta_p1 = torch.nn.Parameter(torch.zeros_like(p1_init))
-        delta_p2 = torch.nn.Parameter(torch.zeros_like(p2_init))
-        widths = torch.nn.Parameter(width_init.clone())
-        colors = torch.nn.Parameter(color_init.clone())
-        opacities = torch.nn.Parameter(opacity_init.clone())
-
-        parameters: list[torch.nn.Parameter] = [widths, opacities]
-        if continuous_color:
-            parameters.append(colors)
-        if optimize_geometry and geometry_bound > 0.0:
-            parameters.extend([delta_p0, delta_p1, delta_p2])
-
-        optimizer = torch.optim.Adam(parameters, lr=lr)
-
-        def geometry(
-            p0_init: torch.Tensor = p0_init,
-            p1_init: torch.Tensor = p1_init,
-            p2_init: torch.Tensor = p2_init,
-            delta_p0: torch.Tensor = delta_p0,
-            delta_p1: torch.Tensor = delta_p1,
-            delta_p2: torch.Tensor = delta_p2,
-        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            if not optimize_geometry or geometry_bound == 0.0:
-                return p0_init, p1_init, p2_init
-            p0 = torch.clamp(
-                p0_init + geometry_bound * torch.tanh(delta_p0),
-                0.0,
-                1.0,
+            current_full = render_strokes(
+                strokes,
+                size=(image_rgb.shape[1], image_rgb.shape[0]),
+                background=background,
             )
-            p1 = torch.clamp(
-                p1_init + geometry_bound * torch.tanh(delta_p1),
-                0.0,
-                1.0,
-            )
-            p2 = torch.clamp(
-                p2_init + geometry_bound * torch.tanh(delta_p2),
-                0.0,
-                1.0,
-            )
-            return p0, p1, p2
+            current_rgb = np.asarray(current_full, dtype=np.float32) / 255.0
+            residual = np.linalg.norm(image_rgb - current_rgb, axis=2)
+            height, width = residual.shape
 
-        def loss_value(
-            geometry=geometry,
-            widths: torch.Tensor = widths,
-            colors: torch.Tensor = colors,
-            color_init: torch.Tensor = color_init,
-            opacities: torch.Tensor = opacities,
-            base: torch.Tensor = base,
-        ) -> torch.Tensor:
-            p0, p1, p2 = geometry()
-            rendered = render_soft_strokes(
-                p0,
-                p1,
-                p2,
-                widths,
-                colors if continuous_color else color_init,
-                opacities,
-                base_rgb=base,
+            scored: list[tuple[float, int]] = []
+            for index, stroke in enumerate(strokes):
+                if index in refined_this_sweep:
+                    continue
+                cx, cy = _stroke_center(stroke)
+                x = min(width - 1, max(0, round(cx * (width - 1))))
+                y = min(height - 1, max(0, round(cy * (height - 1))))
+                scored.append((float(residual[y, x]), index))
+
+            scored.sort(reverse=True)
+            selected_indices = sorted(index for _, index in scored[:batch_size])
+            if not selected_indices:
+                break
+
+            selected_set = set(selected_indices)
+            fixed_strokes = [
+                stroke for index, stroke in enumerate(strokes) if index not in selected_set
+            ]
+            selected = [strokes[index] for index in selected_indices]
+
+            fixed_base = render_strokes(
+                fixed_strokes,
+                size=(opt_width, opt_height),
+                background=background,
             )
-            return _objective_loss(
-                rendered,
-                target,
-                objective=objective,
-                ssim_weight=ssim_weight,
-                edge_weight=edge_weight,
+            base_rgb = np.asarray(fixed_base, dtype=np.float32) / 255.0
+            base = torch.tensor(base_rgb, dtype=dtype, device=torch_device)
+
+            p0_init = torch.tensor(
+                [stroke.p0 for stroke in selected],
+                dtype=dtype,
+                device=torch_device,
+            )
+            p1_init = torch.tensor(
+                [stroke.p1 for stroke in selected],
+                dtype=dtype,
+                device=torch_device,
+            )
+            p2_init = torch.tensor(
+                [stroke.p2 for stroke in selected],
+                dtype=dtype,
+                device=torch_device,
+            )
+            width_init = torch.tensor(
+                [stroke.width for stroke in selected],
+                dtype=dtype,
+                device=torch_device,
+            )
+            color_init = torch.tensor(
+                [stroke.color for stroke in selected],
+                dtype=dtype,
+                device=torch_device,
+            )
+            opacity_init = torch.tensor(
+                [stroke.opacity for stroke in selected],
+                dtype=dtype,
+                device=torch_device,
             )
 
-        with torch.no_grad():
-            stage_initial_loss = float(loss_value().item())
-            if first_loss is None:
-                first_loss = stage_initial_loss
+            delta_p0 = torch.nn.Parameter(torch.zeros_like(p0_init))
+            delta_p1 = torch.nn.Parameter(torch.zeros_like(p1_init))
+            delta_p2 = torch.nn.Parameter(torch.zeros_like(p2_init))
+            widths = torch.nn.Parameter(width_init.clone())
+            colors = torch.nn.Parameter(color_init.clone())
+            opacities = torch.nn.Parameter(opacity_init.clone())
 
-        for _ in range(steps_per_stage):
-            optimizer.zero_grad()
-            loss = loss_value()
-            loss.backward()
-            optimizer.step()
+            parameters: list[torch.nn.Parameter] = [widths, opacities]
+            if continuous_color:
+                parameters.append(colors)
+            if optimize_geometry and geometry_bound > 0.0:
+                parameters.extend([delta_p0, delta_p1, delta_p2])
+
+            optimizer = torch.optim.Adam(parameters, lr=lr)
+
+            def geometry(
+                p0_init: torch.Tensor = p0_init,
+                p1_init: torch.Tensor = p1_init,
+                p2_init: torch.Tensor = p2_init,
+                delta_p0: torch.Tensor = delta_p0,
+                delta_p1: torch.Tensor = delta_p1,
+                delta_p2: torch.Tensor = delta_p2,
+            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                if not optimize_geometry or geometry_bound == 0.0:
+                    return p0_init, p1_init, p2_init
+                p0 = torch.clamp(
+                    p0_init + geometry_bound * torch.tanh(delta_p0),
+                    0.0,
+                    1.0,
+                )
+                p1 = torch.clamp(
+                    p1_init + geometry_bound * torch.tanh(delta_p1),
+                    0.0,
+                    1.0,
+                )
+                p2 = torch.clamp(
+                    p2_init + geometry_bound * torch.tanh(delta_p2),
+                    0.0,
+                    1.0,
+                )
+                return p0, p1, p2
+
+            def loss_value(
+                geometry=geometry,
+                widths: torch.Tensor = widths,
+                colors: torch.Tensor = colors,
+                color_init: torch.Tensor = color_init,
+                opacities: torch.Tensor = opacities,
+                base: torch.Tensor = base,
+            ) -> torch.Tensor:
+                p0, p1, p2 = geometry()
+                rendered = render_soft_strokes(
+                    p0,
+                    p1,
+                    p2,
+                    widths,
+                    colors if continuous_color else color_init,
+                    opacities,
+                    base_rgb=base,
+                )
+                return _objective_loss(
+                    rendered,
+                    target,
+                    objective=objective,
+                    ssim_weight=ssim_weight,
+                    edge_weight=edge_weight,
+                )
 
             with torch.no_grad():
-                widths.clamp_(0.002, 0.06)
-                if continuous_color:
-                    colors.clamp_(0.0, 1.0)
-                opacities.clamp_(0.20, 1.0)
+                stage_initial_loss = float(loss_value().item())
+                if first_loss is None:
+                    first_loss = stage_initial_loss
 
-        with torch.no_grad():
-            last_loss = float(loss_value().item())
-            final_p0, final_p1, final_p2 = geometry()
+            for _ in range(steps_per_stage):
+                optimizer.zero_grad()
+                loss = loss_value()
+                loss.backward()
+                optimizer.step()
 
-        color_tensor = colors if continuous_color else color_init
-        for local_index, stroke_index in enumerate(selected_indices):
-            source = selected[local_index]
-            if optimize_geometry and geometry_bound > 0.0:
-                p0 = tuple(float(v) for v in final_p0[local_index].cpu().tolist())
-                p1 = tuple(float(v) for v in final_p1[local_index].cpu().tolist())
-                p2 = tuple(float(v) for v in final_p2[local_index].cpu().tolist())
-            else:
-                p0, p1, p2 = source.p0, source.p1, source.p2
+                with torch.no_grad():
+                    widths.clamp_(0.002, 0.06)
+                    if continuous_color:
+                        colors.clamp_(0.0, 1.0)
+                    opacities.clamp_(0.20, 1.0)
 
-            strokes[stroke_index] = Stroke(
-                p0=p0,
-                p1=p1,
-                p2=p2,
-                width=min(0.06, max(0.002, float(widths[local_index].cpu().item()))),
-                color=tuple(float(v) for v in color_tensor[local_index].cpu().tolist()),
-                opacity=min(1.0, max(0.20, float(opacities[local_index].cpu().item()))),
-            )
+            with torch.no_grad():
+                last_loss = float(loss_value().item())
+                final_p0, final_p1, final_p2 = geometry()
 
-        refined_indices.update(selected_indices)
-        completed_stages += 1
+            color_tensor = colors if continuous_color else color_init
+            for local_index, stroke_index in enumerate(selected_indices):
+                source = selected[local_index]
+                if optimize_geometry and geometry_bound > 0.0:
+                    p0 = tuple(float(v) for v in final_p0[local_index].cpu().tolist())
+                    p1 = tuple(float(v) for v in final_p1[local_index].cpu().tolist())
+                    p2 = tuple(float(v) for v in final_p2[local_index].cpu().tolist())
+                else:
+                    p0, p1, p2 = source.p0, source.p1, source.p2
+
+                strokes[stroke_index] = Stroke(
+                    p0=p0,
+                    p1=p1,
+                    p2=p2,
+                    width=min(
+                        0.06,
+                        max(0.002, float(widths[local_index].cpu().item())),
+                    ),
+                    color=tuple(
+                        float(v) for v in color_tensor[local_index].cpu().tolist()
+                    ),
+                    opacity=min(
+                        1.0,
+                        max(0.20, float(opacities[local_index].cpu().item())),
+                    ),
+                )
+
+            refined_this_sweep.update(selected_indices)
+            all_refined_indices.update(selected_indices)
+            completed_stages += 1
+            sweep_stages += 1
+
+        if sweep_stages == 0:
+            break
+        completed_sweeps += 1
 
     stats = RefinementStats(
-        refined_strokes=len(refined_indices),
+        refined_strokes=len(all_refined_indices),
         steps=completed_stages * steps_per_stage,
         initial_loss=0.0 if first_loss is None else first_loss,
         final_loss=last_loss,
@@ -708,5 +731,6 @@ def refine_residual_strokes_staged(
         geometry_bound=geometry_bound,
         continuous_color=continuous_color,
         stages=completed_stages,
+        sweeps=completed_sweeps,
     )
     return strokes, background, stats

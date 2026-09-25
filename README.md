@@ -211,3 +211,31 @@ python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
 ```
 
 With the defaults above, four stages optimize up to 1024 distinct strokes.
+
+
+### Repeated full-program sweeps
+
+Staged refinement can revisit the full stroke program multiple times with
+`--refinement-sweeps`. Within each sweep, batches are disjoint; at the start
+of the next sweep, all strokes become eligible again and are reranked from the
+new residual image. This lets early batches be corrected after later strokes
+have changed.
+
+For a 2000-stroke program with 256-stroke batches, eight stages cover the whole
+program once. Two sweeps therefore revisit the full program twice:
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round7/fleur_staged_structure_2000_sweep2 \
+  --budgets 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --method staged_refined_structure \
+  --device cuda \
+  --optimized-stroke-count 256 \
+  --refinement-stages 8 \
+  --refinement-sweeps 2 \
+  --optimize-geometry \
+  --geometry-bound 0.03 \
+  --continuous-color
+```

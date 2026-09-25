@@ -332,3 +332,24 @@ The command reports MSE, PSNR, and SSIM between identical rich primitive
 programs rendered by the real and differentiable renderers. CI also enforces a
 minimum consistency threshold so future refinement changes cannot silently
 increase surrogate-renderer mismatch.
+
+
+### Ordered mixed-program refinement
+
+Rich refinement now evaluates optimized primitives inside the actual compositing
+program instead of against an incomplete canvas.
+
+During patch optimization, the later tapered-stroke suffix remains present via a
+cached raster affine transform. During tapered-stroke optimization, fixed strokes
+before, between, and after selected trainable strokes are cached as raster
+segments and reapplied in the original order.
+
+Renderer calibration now reports both a small reference program and a denser
+overlap stress test:
+
+```bash
+python scripts/calibrate_renderer.py
+```
+
+This is intended to prevent surrogate-loss improvements that do not transfer to
+the final Pillow raster output.

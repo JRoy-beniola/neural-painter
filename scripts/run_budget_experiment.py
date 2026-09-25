@@ -29,6 +29,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--continuous-color", action="store_true")
     parser.add_argument("--refinement-stages", type=int, default=4)
     parser.add_argument("--refinement-sweeps", type=int, default=1)
+    parser.add_argument("--cleanup-stroke-count", type=int, default=64)
+    parser.add_argument("--cleanup-geometry-bound", type=float, default=0.0)
+    parser.add_argument("--cleanup-optimize-geometry", action="store_true")
+    parser.add_argument("--cleanup-geometry-drift-weight", type=float, default=0.10)
     return parser.parse_args()
 
 
@@ -48,6 +52,10 @@ def main() -> None:
         continuous_color=args.continuous_color,
         refinement_stages=args.refinement_stages,
         refinement_sweeps=args.refinement_sweeps,
+        cleanup_stroke_count=args.cleanup_stroke_count,
+        cleanup_geometry_bound=args.cleanup_geometry_bound,
+        cleanup_optimize_geometry=args.cleanup_optimize_geometry,
+        cleanup_geometry_drift_weight=args.cleanup_geometry_drift_weight,
     )
     print(json.dumps(report, indent=2))
 

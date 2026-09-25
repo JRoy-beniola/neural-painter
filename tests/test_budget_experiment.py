@@ -59,3 +59,24 @@ def test_residual_budget_experiment_uses_estimated_background(tmp_path) -> None:
     assert report["method"] == "residual"
     assert report["runs"][0]["background_rgb"] == [0, 0, 0]
     assert (output_dir / "painted_6.png").exists()
+
+
+def test_refined_budget_experiment_records_refinement_metadata(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "refined"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=7,
+        budgets=[4],
+        method="refined",
+    )
+
+    assert report["method"] == "refined"
+    refinement = report["runs"][0]["refinement"]
+    assert refinement["refined_strokes"] == 4
+    assert refinement["final_loss"] <= refinement["initial_loss"]
+    assert (output_dir / "painted_4.png").exists()

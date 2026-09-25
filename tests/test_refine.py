@@ -80,3 +80,24 @@ def test_refinement_keeps_geometry_fixed() -> None:
         assert before.p2 == after.p2
         assert 0.004 <= after.width <= 0.035
         assert 0.35 <= after.opacity <= 0.95
+
+
+def test_structure_aware_refinement_improves_composite_loss() -> None:
+    image = np.zeros((24, 24, 3), dtype=np.float32)
+    image[5:19, 5:19] = (0.75, 0.9, 1.0)
+    palette = extract_palette(image, 2, random_state=0)
+
+    strokes, _, stats = refine_residual_strokes(
+        image,
+        palette,
+        8,
+        seed=5,
+        steps=3,
+        max_refine_strokes=4,
+        optimization_resolution=24,
+        objective="structure",
+    )
+
+    assert len(strokes) == 8
+    assert stats.objective == "structure"
+    assert stats.final_loss <= stats.initial_loss

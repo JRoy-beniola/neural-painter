@@ -94,3 +94,85 @@ def rich_renderer_consistency(
     )
     soft_rgb = soft.detach().cpu().numpy()
     return reconstruction_metrics(real_rgb, soft_rgb)
+
+
+
+def dense_rich_renderer_consistency(
+    *,
+    size: tuple[int, int] = (72, 72),
+    seed: int = 17,
+) -> dict[str, float]:
+    """Stress-test accumulated mismatch on a dense overlapping rich program."""
+    width, height = size
+    rng = np.random.default_rng(seed)
+    background = (9, 13, 20)
+
+    patches: list[EllipsePatch] = []
+    for _ in range(12):
+        patches.append(
+            EllipsePatch(
+                center=(float(rng.uniform(0.22, 0.78)), float(rng.uniform(0.22, 0.78))),
+                radius_x=float(rng.uniform(0.035, 0.14)),
+                radius_y=float(rng.uniform(0.025, 0.10)),
+                angle=float(rng.uniform(-1.2, 1.2)),
+                color=tuple(float(v) for v in rng.uniform(0.08, 0.95, size=3)),
+                opacity=float(rng.uniform(0.45, 0.88)),
+            )
+        )
+
+    strokes: list[TaperedStroke] = []
+    for _ in range(24):
+        center = rng.uniform(0.25, 0.75, size=2)
+        delta0 = rng.uniform(-0.22, 0.22, size=2)
+        delta2 = rng.uniform(-0.22, 0.22, size=2)
+        control = center + rng.uniform(-0.15, 0.15, size=2)
+        p0 = np.clip(center + delta0, 0.02, 0.98)
+        p1 = np.clip(control, 0.02, 0.98)
+        p2 = np.clip(center + delta2, 0.02, 0.98)
+        strokes.append(
+            TaperedStroke(
+                p0=(float(p0[0]), float(p0[1])),
+                p1=(float(p1[0]), float(p1[1])),
+                p2=(float(p2[0]), float(p2[1])),
+                width_start=float(rng.uniform(0.008, 0.045)),
+                width_mid=float(rng.uniform(0.02, 0.075)),
+                width_end=float(rng.uniform(0.008, 0.045)),
+                color=tuple(float(v) for v in rng.uniform(0.08, 0.98, size=3)),
+                opacity=float(rng.uniform(0.45, 0.9)),
+            )
+        )
+
+    real = render_strokes(
+        [*patches, *strokes],
+        size=size,
+        background=background,
+        samples_per_curve=32,
+    )
+    real_rgb = np.asarray(real, dtype=np.float32) / 255.0
+
+    dtype = torch.float32
+    base = torch.empty((height, width, 3), dtype=dtype)
+    base[...] = torch.tensor(background, dtype=dtype) / 255.0
+
+    soft = render_soft_ellipses(
+        torch.tensor([patch.center for patch in patches], dtype=dtype),
+        torch.tensor([patch.radius_x for patch in patches], dtype=dtype),
+        torch.tensor([patch.radius_y for patch in patches], dtype=dtype),
+        torch.tensor([patch.angle for patch in patches], dtype=dtype),
+        torch.tensor([patch.color for patch in patches], dtype=dtype),
+        torch.tensor([patch.opacity for patch in patches], dtype=dtype),
+        base_rgb=base,
+    )
+    soft = render_soft_tapered_strokes(
+        torch.tensor([stroke.p0 for stroke in strokes], dtype=dtype),
+        torch.tensor([stroke.p1 for stroke in strokes], dtype=dtype),
+        torch.tensor([stroke.p2 for stroke in strokes], dtype=dtype),
+        torch.tensor([stroke.width_start for stroke in strokes], dtype=dtype),
+        torch.tensor([stroke.width_mid for stroke in strokes], dtype=dtype),
+        torch.tensor([stroke.width_end for stroke in strokes], dtype=dtype),
+        torch.tensor([stroke.color for stroke in strokes], dtype=dtype),
+        torch.tensor([stroke.opacity for stroke in strokes], dtype=dtype),
+        base_rgb=soft,
+        samples_per_curve=32,
+    )
+    return reconstruction_metrics(real_rgb, soft.detach().cpu().numpy())

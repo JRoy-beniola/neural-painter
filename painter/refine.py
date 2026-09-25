@@ -67,19 +67,17 @@ def refine_residual_strokes(
     *,
     seed: int = 0,
     steps: int = 30,
-    lr: float = 0.025,
-    max_refine_strokes: int = 32,
+    lr: float = 0.015,
+    max_refine_strokes: int = 12,
     optimization_resolution: int = 64,
-    movement_weight: float = 0.02,
     device: str = "auto",
 ) -> tuple[list[Stroke], tuple[int, int, int], RefinementStats]:
-    """Refine a subset of residual-painter strokes with gradient descent.
+    """Refine appearance parameters while keeping residual stroke geometry fixed.
 
     The full residual stroke program is retained. Only strokes whose centers lie
-    in the highest-error regions are optimized, while all remaining strokes are
-    rendered once into a fixed low-resolution base. This keeps Phase 0 refinement
-    computationally tractable while still testing whether gradient-based stroke
-    adjustment improves a strong procedural initialization.
+    in the highest-error regions are selected, and only width, color, and opacity
+    are optimized. Fixed geometry prevents long-range drift and stray-line
+    artifacts while preserving the residual painter's spatial structure.
     """
     if steps < 1:
         raise ValueError("steps must be positive")
@@ -145,14 +143,14 @@ def refine_residual_strokes(
         device=torch_device,
     )
 
-    p0 = torch.nn.Parameter(p0_init.clone())
-    p1 = torch.nn.Parameter(p1_init.clone())
-    p2 = torch.nn.Parameter(p2_init.clone())
+    p0 = p0_init.clone()
+    p1 = p1_init.clone()
+    p2 = p2_init.clone()
     widths = torch.nn.Parameter(width_init.clone())
     colors = torch.nn.Parameter(color_init.clone())
     opacities = torch.nn.Parameter(opacity_init.clone())
 
-    optimizer = torch.optim.Adam([p0, p1, p2, widths, colors, opacities], lr=lr)
+    optimizer = torch.optim.Adam([widths, colors, opacities], lr=lr)
 
     target = torch.tensor(target_small, dtype=dtype, device=torch_device)
     base = torch.tensor(base_rgb, dtype=dtype, device=torch_device)
@@ -167,13 +165,7 @@ def refine_residual_strokes(
             opacities,
             base_rgb=base,
         )
-        mse = torch.mean((rendered - target) ** 2)
-        movement = (
-            torch.mean((p0 - p0_init) ** 2)
-            + torch.mean((p1 - p1_init) ** 2)
-            + torch.mean((p2 - p2_init) ** 2)
-        )
-        return mse + movement_weight * movement
+        return torch.mean((rendered - target) ** 2)
 
     with torch.no_grad():
         initial_loss = float(loss_value().item())
@@ -185,12 +177,9 @@ def refine_residual_strokes(
         optimizer.step()
 
         with torch.no_grad():
-            p0.clamp_(0.0, 1.0)
-            p1.clamp_(0.0, 1.0)
-            p2.clamp_(0.0, 1.0)
-            widths.clamp_(0.002, 0.08)
+            widths.clamp_(0.004, 0.035)
             colors.clamp_(0.0, 1.0)
-            opacities.clamp_(0.05, 1.0)
+            opacities.clamp_(0.35, 0.95)
 
     with torch.no_grad():
         final_loss = float(loss_value().item())

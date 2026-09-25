@@ -39,6 +39,7 @@ def run_budget_experiment(
     geometry_bound: float = 0.03,
     continuous_color: bool = False,
     refinement_stages: int = 4,
+    refinement_sweeps: int = 1,
 ) -> dict[str, object]:
     """Run fixed-budget reconstructions and persist images plus metrics."""
     if not budgets or any(budget < 1 for budget in budgets):
@@ -130,6 +131,7 @@ def run_budget_experiment(
                 device=device,
                 objective="mse",
                 stages=refinement_stages,
+                sweeps=refinement_sweeps,
                 batch_size=256 if optimized_stroke_count is None else optimized_stroke_count,
                 optimize_geometry=optimize_geometry,
                 geometry_bound=geometry_bound,
@@ -144,6 +146,7 @@ def run_budget_experiment(
                 device=device,
                 objective="structure",
                 stages=refinement_stages,
+                sweeps=refinement_sweeps,
                 batch_size=256 if optimized_stroke_count is None else optimized_stroke_count,
                 optimize_geometry=optimize_geometry,
                 geometry_bound=geometry_bound,
@@ -177,6 +180,7 @@ def run_budget_experiment(
                 "geometry_bound": refinement.geometry_bound,
                 "continuous_color": refinement.continuous_color,
                 "stages": refinement.stages,
+                "sweeps": refinement.sweeps,
             }
         runs.append(run)
 

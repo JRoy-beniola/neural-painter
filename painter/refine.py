@@ -22,6 +22,7 @@ class RefinementStats:
     steps: int
     initial_loss: float
     final_loss: float
+    device: str
 
 
 def _stroke_center(stroke: Stroke) -> tuple[float, float]:
@@ -70,7 +71,7 @@ def refine_residual_strokes(
     max_refine_strokes: int = 32,
     optimization_resolution: int = 64,
     movement_weight: float = 0.02,
-    device: str = "cpu",
+    device: str = "auto",
 ) -> tuple[list[Stroke], tuple[int, int, int], RefinementStats]:
     """Refine a subset of residual-painter strokes with gradient descent.
 
@@ -121,7 +122,16 @@ def refine_residual_strokes(
     )
     base_rgb = np.asarray(fixed_base, dtype=np.float32) / 255.0
 
-    torch_device = torch.device(device)
+    if device == "auto":
+        resolved_device = "cuda" if torch.cuda.is_available() else "cpu"
+    elif device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA was requested but is not available to PyTorch")
+    elif device not in {"cpu", "cuda"}:
+        raise ValueError("device must be one of: auto, cpu, cuda")
+    else:
+        resolved_device = device
+
+    torch_device = torch.device(resolved_device)
     dtype = torch.float32
 
     p0_init = torch.tensor([stroke.p0 for stroke in selected], dtype=dtype, device=torch_device)
@@ -207,5 +217,6 @@ def refine_residual_strokes(
         steps=steps,
         initial_loss=initial_loss,
         final_loss=final_loss,
+        device=resolved_device,
     )
     return refined_strokes, background, stats

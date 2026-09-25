@@ -14,8 +14,8 @@ from painter.diffrender import (
     render_soft_tapered_strokes,
 )
 from painter.iterative import paint_residual
-from painter.rich import paint_region_rich_residual
 from painter.renderer import render_strokes
+from painter.rich import paint_region_rich_residual
 from painter.stroke import EllipsePatch, Primitive, Stroke, TaperedStroke
 
 
@@ -894,13 +894,6 @@ def refine_region_rich_primitives(
             for index in range(len(patches))
         ]
         refined_count += len(refined_patches)
-
-    patch_canvas = render_strokes(
-        refined_patches,
-        size=(width, height),
-        background=background,
-    )
-    patch_rgb = np.asarray(patch_canvas, dtype=np.float32) / 255.0
 
     refined_tapered = list(tapered)
     if tapered:

@@ -12,13 +12,17 @@ from PIL import Image
 from painter.iterative import paint_residual
 from painter.metrics import reconstruction_metrics
 from painter.palette import extract_palette
-from painter.refine import refine_residual_strokes, refine_residual_strokes_global
+from painter.refine import (
+    refine_residual_strokes,
+    refine_residual_strokes_global,
+    refine_residual_strokes_staged,
+)
 from painter.renderer import render_strokes
 from painter.sampling import sample_gradient_strokes
 from painter.structured import paint_structured_residual
 
 DEFAULT_BUDGETS = (100, 250, 500, 1000, 2000)
-METHODS = ("static", "residual", "structured", "refined", "refined_structure", "global_refined", "global_refined_structure")
+METHODS = ("static", "residual", "structured", "refined", "refined_structure", "global_refined", "global_refined_structure", "staged_refined", "staged_refined_structure")
 
 
 def run_budget_experiment(
@@ -34,6 +38,7 @@ def run_budget_experiment(
     optimize_geometry: bool = False,
     geometry_bound: float = 0.03,
     continuous_color: bool = False,
+    refinement_stages: int = 4,
 ) -> dict[str, object]:
     """Run fixed-budget reconstructions and persist images plus metrics."""
     if not budgets or any(budget < 1 for budget in budgets):
@@ -103,7 +108,7 @@ def run_budget_experiment(
                 geometry_bound=geometry_bound,
                 continuous_color=continuous_color,
             )
-        else:
+        elif method == "global_refined_structure":
             strokes, background, refinement = refine_residual_strokes_global(
                 target_rgb,
                 palette,
@@ -112,6 +117,34 @@ def run_budget_experiment(
                 device=device,
                 objective="structure",
                 optimized_stroke_count=optimized_stroke_count,
+                optimize_geometry=optimize_geometry,
+                geometry_bound=geometry_bound,
+                continuous_color=continuous_color,
+            )
+        elif method == "staged_refined":
+            strokes, background, refinement = refine_residual_strokes_staged(
+                target_rgb,
+                palette,
+                budget,
+                seed=seed,
+                device=device,
+                objective="mse",
+                stages=refinement_stages,
+                batch_size=256 if optimized_stroke_count is None else optimized_stroke_count,
+                optimize_geometry=optimize_geometry,
+                geometry_bound=geometry_bound,
+                continuous_color=continuous_color,
+            )
+        else:
+            strokes, background, refinement = refine_residual_strokes_staged(
+                target_rgb,
+                palette,
+                budget,
+                seed=seed,
+                device=device,
+                objective="structure",
+                stages=refinement_stages,
+                batch_size=256 if optimized_stroke_count is None else optimized_stroke_count,
                 optimize_geometry=optimize_geometry,
                 geometry_bound=geometry_bound,
                 continuous_color=continuous_color,
@@ -143,6 +176,7 @@ def run_budget_experiment(
                 "optimize_geometry": refinement.optimize_geometry,
                 "geometry_bound": refinement.geometry_bound,
                 "continuous_color": refinement.continuous_color,
+                "stages": refinement.stages,
             }
         runs.append(run)
 

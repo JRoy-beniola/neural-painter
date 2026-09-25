@@ -95,7 +95,7 @@ def paint_structured_residual(
                     min_length=config.edge_min_length,
                     max_length=config.edge_max_length,
                     width=config.edge_width,
-                    opacity=0.62,
+                    opacity=0.68,
                 )
             )
 
@@ -110,7 +110,7 @@ def paint_structured_residual(
                     min_length=config.fill_min_length,
                     max_length=config.fill_max_length,
                     width=config.fill_width,
-                    opacity=0.72,
+                    opacity=0.58,
                 )
             )
 

@@ -106,3 +106,22 @@ python scripts/run_budget_experiment.py assets/inputs/example.jpg \
 ```
 
 The refinement metadata stored in `metrics.json` includes the number of optimized strokes, optimization steps, and the initial/final differentiable loss.
+
+
+### GPU refinement
+
+Refinement defaults to `--device auto`. On a local machine with CUDA-enabled PyTorch and an NVIDIA GPU, it uses CUDA automatically; CI continues to use CPU for portability.
+
+To force CUDA:
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round3/fleur_de_lis_refined \
+  --budgets 500 \
+  --palette-size 8 \
+  --seed 0 \
+  --method refined \
+  --device cuda
+```
+
+Use `--device cpu` to force CPU execution.

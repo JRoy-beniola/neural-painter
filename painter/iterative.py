@@ -30,7 +30,7 @@ DEFAULT_PASSES = (
 )
 
 
-def _allocate_counts(total_strokes: int, passes: tuple[PassConfig, ...]) -> list[int]:
+def allocate_pass_counts(total_strokes: int, passes: tuple[PassConfig, ...]) -> list[int]:
     if total_strokes < 1:
         raise ValueError("total_strokes must be positive")
     if not passes:
@@ -53,7 +53,7 @@ def _allocate_counts(total_strokes: int, passes: tuple[PassConfig, ...]) -> list
     return [int(value) for value in counts]
 
 
-def _normalized_map(values: np.ndarray) -> np.ndarray:
+def normalize_map(values: np.ndarray) -> np.ndarray:
     maximum = float(values.max())
     if maximum <= 0.0:
         return np.zeros_like(values, dtype=float)
@@ -88,8 +88,8 @@ def paint_residual(
 
     h, w, _ = image_rgb.shape
     background = estimate_border_background(image_rgb)
-    gradient = _normalized_map(gradient_magnitude(image_rgb))
-    counts = _allocate_counts(total_strokes, passes)
+    gradient = normalize_map(gradient_magnitude(image_rgb))
+    counts = allocate_pass_counts(total_strokes, passes)
 
     strokes: list[Stroke] = []
 
@@ -101,7 +101,7 @@ def paint_residual(
         current_rgb = np.asarray(current, dtype=np.float32) / 255.0
 
         residual = np.linalg.norm(image_rgb - current_rgb, axis=2)
-        residual = _normalized_map(residual)
+        residual = normalize_map(residual)
 
         weight_map = residual_weight * residual + gradient_weight * gradient
         weight_map += 1e-12

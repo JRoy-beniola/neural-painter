@@ -111,7 +111,7 @@ def paint_rich_residual(
     gradient = normalize_map(gradient_magnitude(image_rgb))
     smoothness = 1.0 - gradient
 
-    patch_count = int(round(total_primitives * patch_fraction))
+    patch_count = round(total_primitives * patch_fraction)
     stroke_count = total_primitives - patch_count
     coarse_count = patch_count // 2
     medium_count = patch_count - coarse_count

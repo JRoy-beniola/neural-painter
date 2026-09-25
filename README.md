@@ -239,3 +239,27 @@ python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
   --geometry-bound 0.03 \
   --continuous-color
 ```
+
+
+### Richer stroke-space representation
+
+Phase 0F introduces two primitives beyond the original constant-width Bezier:
+
+- `TaperedStroke`: quadratic Bezier centerline with independent start, middle,
+  and end widths.
+- `EllipsePatch`: filled oriented ellipse for broad smooth image regions.
+
+The `rich_residual` experiment uses broad patches first on smooth high-residual
+areas, then adds tapered gradient-aligned strokes for the remaining detail.
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round8/fleur_rich_residual_2000 \
+  --budgets 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --method rich_residual
+```
+
+This is the first direct representation-capacity comparison against the old
+constant-width stroke program at the same primitive budget.

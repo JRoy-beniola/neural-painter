@@ -149,6 +149,12 @@ def diagnose_run(run: dict[str, Any]) -> list[Diagnosis]:
 def candidate_library() -> tuple[ExperimentCandidate, ...]:
     """Safe search space over already-tested painter mechanisms."""
     return (
+        ExperimentCandidate("adaptive_closed_region_residual", optimized_stroke_count=None),
+        ExperimentCandidate(
+            "adaptive_closed_region_refined",
+            optimized_stroke_count=128,
+            geometry_bound=0.01,
+        ),
         ExperimentCandidate("adaptive_rich_residual", optimized_stroke_count=None),
         ExperimentCandidate("polygon_rich_residual", optimized_stroke_count=None),
         ExperimentCandidate("mixed_rich_residual", optimized_stroke_count=None),
@@ -202,7 +208,9 @@ def _candidate_priority(
     codes = {diagnosis.code for diagnosis in diagnoses}
 
     if "bootstrap" in codes:
-        if candidate.method == "adaptive_rich_residual":
+        if candidate.method == "adaptive_closed_region_residual":
+            score += 12.0
+        elif candidate.method == "adaptive_rich_residual":
             score += 10.0
         elif candidate.method == "polygon_rich_residual":
             score += 8.0
@@ -212,6 +220,10 @@ def _candidate_priority(
             score -= 3.0
 
     if "global_structure" in codes or "capacity_allocation" in codes:
+        if candidate.method == "adaptive_closed_region_residual":
+            score += 8.0
+        if candidate.method == "adaptive_closed_region_refined":
+            score += 5.0
         if candidate.method == "adaptive_rich_residual":
             score += 6.0
         if candidate.method == "polygon_rich_residual":
@@ -233,8 +245,11 @@ def _candidate_priority(
         else:
             score += 4.0
 
-    if "boundary_placement" in codes and "polygon" in candidate.method:
-        score += 2.0
+    if "boundary_placement" in codes:
+        if "closed_region" in candidate.method:
+            score += 5.0
+        elif "polygon" in candidate.method:
+            score += 2.0
     if "fine_fidelity" in codes and "refined" in candidate.method:
         score += 1.0
 
@@ -328,14 +343,14 @@ def frontier_diagnoses(
         if champion is not None
         else []
     )
-    if not frontier:
+    if len(frontier) < 2:
         return champion_findings, []
 
     findings_by_record = [
         diagnose_run(record["report"]["runs"][0])
         for record in frontier
     ]
-    threshold = max(1, (len(frontier) + 1) // 2)
+    threshold = max(2, (len(frontier) + 1) // 2)
     counts: dict[str, int] = {}
     severities: dict[str, list[float]] = {}
     examples: dict[str, Diagnosis] = {}
@@ -427,7 +442,7 @@ def mutation_plan(diagnoses: list[Diagnosis]) -> list[dict[str, str]]:
                 "area": "painter/rich.py",
                 "hypothesis": "region initialization does not place smooth boundaries accurately",
                 "change": (
-                    "fit closed spline regions or locally optimize region vertices before detail"
+                    "evaluate adaptive closed Bezier regions before adding more detail refinement"
                 ),
             }
         )

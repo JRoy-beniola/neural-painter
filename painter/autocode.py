@@ -372,8 +372,8 @@ def autonomous_research(
                 )
                 continue
 
-            diff = _git(worktree, "diff", "--stat").stdout.strip()
-            if not diff:
+            status = _git(worktree, "status", "--porcelain").stdout.strip()
+            if not status:
                 history.append(
                     {
                         "cycle": cycle,

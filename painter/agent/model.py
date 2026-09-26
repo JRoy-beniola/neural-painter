@@ -75,7 +75,7 @@ def parse_json_action(text: str) -> dict[str, Any]:
         value = json.loads(stripped[start : end + 1])
 
     if not isinstance(value, dict):
-        raise ValueError("model action must be a JSON object")
+        raise TypeError("model action must be a JSON object")
     if not isinstance(value.get("action"), str):
-        raise ValueError("model action must contain a string 'action'")
+        raise TypeError("model action must contain a string 'action'")
     return value

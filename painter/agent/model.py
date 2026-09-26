@@ -106,6 +106,40 @@ class OpenAICompatibleModel:
     api_key: str = ""
     timeout: int = 180
 
+    def complete_text(self, messages: list[dict[str, Any]]) -> str:
+        """Return one unconstrained text completion without JSON/tool forcing."""
+        endpoint = self.base_url.rstrip("/") + "/chat/completions"
+        request_payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.0,
+            "stream": False,
+            "reasoning_effort": "none",
+        }
+        payload = json.dumps(request_payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        request = urllib.request.Request(
+            endpoint, data=payload, headers=headers, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"model endpoint failed at {endpoint}: {exc}") from exc
+
+        try:
+            content = str(body["choices"][0]["message"]["content"])
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(
+                "model endpoint returned an unsupported chat-completions response"
+            ) from exc
+        if not content.strip():
+            raise RuntimeError("model endpoint returned empty assistant content")
+        return content
+
     def complete(
         self,
         messages: list[dict[str, Any]],

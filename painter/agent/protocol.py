@@ -14,7 +14,6 @@ ALLOWED_PRIMARY_METRICS = frozenset(
         "ssim",
         "boundary_f1",
         "boundary_distance",
-        "high_frequency_ratio",
         "runtime_ms",
     }
 )

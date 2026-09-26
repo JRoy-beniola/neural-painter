@@ -1,34 +1,27 @@
 """Autonomous code-mutation harness for Neural Painter autoresearch.
 
 This module turns a research diagnosis into an isolated coding-agent experiment:
-create a git worktree, ask Codex to implement one bounded mutation, independently
-run CI checks, rerun autoresearch, and keep only mutations that improve the
-measured research frontier.
+create a git worktree, ask the repository-native NeuralPainterAgent to implement
+one bounded mutation, independently run CI checks, rerun autoresearch, and keep
+only mutations that improve the measured research frontier.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from painter.agent import NeuralPainterAgent, OpenAICompatibleModel
+
 
 @dataclass(frozen=True, slots=True)
 class AcceptanceDecision:
     accepted: bool
     reasons: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class AgentRun:
-    returncode: int
-    stdout_path: Path
-    stderr_path: Path
 
 
 def _run(
@@ -58,17 +51,6 @@ def ensure_clean_repository(repo_root: Path) -> None:
         raise RuntimeError(
             "repository has uncommitted changes; commit or stash them before autoresearch"
         )
-
-
-def require_codex() -> str:
-    """Resolve the Codex CLI used for local autonomous source editing."""
-    executable = shutil.which(os.environ.get("NEURAL_PAINTER_CODEX", "codex"))
-    if executable is None:
-        raise RuntimeError(
-            "Codex CLI was not found. Install/configure it or set "
-            "NEURAL_PAINTER_CODEX to its executable path."
-        )
-    return executable
 
 
 def build_agent_prompt(
@@ -117,33 +99,6 @@ Constraints:
 
 Finish with a concise explanation of what you changed and why.
 """
-
-
-def invoke_codex(
-    worktree: Path,
-    prompt: str,
-    *,
-    log_dir: Path,
-    timeout: int,
-) -> AgentRun:
-    """Run Codex non-interactively inside the isolated worktree."""
-    executable = require_codex()
-    log_dir.mkdir(parents=True, exist_ok=True)
-    stdout_path = log_dir / "codex.jsonl"
-    stderr_path = log_dir / "codex.stderr.txt"
-
-    result = _run(
-        [executable, "exec", "--json", "--full-auto", prompt],
-        cwd=worktree,
-        timeout=timeout,
-    )
-    stdout_path.write_text(result.stdout, encoding="utf-8")
-    stderr_path.write_text(result.stderr, encoding="utf-8")
-    return AgentRun(
-        returncode=result.returncode,
-        stdout_path=stdout_path,
-        stderr_path=stderr_path,
-    )
 
 
 def run_quality_gates(
@@ -301,7 +256,11 @@ def autonomous_research(
     palette_size: int,
     seed: int,
     device: str,
-    agent_timeout: int = 1800,
+    model_base_url: str,
+    model_name: str,
+    model_api_key: str = "",
+    model_timeout: int = 180,
+    agent_turns: int = 24,
     gate_timeout: int = 900,
     experiment_timeout: int = 3600,
     apply: bool = False,
@@ -310,7 +269,8 @@ def autonomous_research(
     if mutation_cycles < 1:
         raise ValueError("mutation_cycles must be positive")
     ensure_clean_repository(repo_root)
-    require_codex()
+    if not model_name.strip():
+        raise ValueError("model_name must be non-empty")
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     branch = f"autoresearch/{stamp}"
@@ -353,21 +313,42 @@ def autonomous_research(
             (cycle_dir / "prompt.txt").parent.mkdir(parents=True, exist_ok=True)
             (cycle_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
 
-            agent = invoke_codex(
-                worktree,
-                prompt,
-                log_dir=cycle_dir,
-                timeout=agent_timeout,
+            model = OpenAICompatibleModel(
+                base_url=model_base_url,
+                model=model_name,
+                api_key=model_api_key,
+                timeout=model_timeout,
             )
-            if agent.returncode != 0:
+            agent = NeuralPainterAgent(
+                model,
+                worktree,
+                max_turns=agent_turns,
+            )
+            try:
+                agent_result = agent.run(prompt, log_dir=cycle_dir)
+            except Exception as exc:
                 _git(worktree, "reset", "--hard", "HEAD")
                 _git(worktree, "clean", "-fd")
                 history.append(
                     {
                         "cycle": cycle,
                         "status": "rejected",
-                        "reason": "coding agent failed",
+                        "reason": f"coding agent failed: {type(exc).__name__}: {exc}",
                         "mutation": mutation,
+                    }
+                )
+                continue
+
+            if not agent_result.success:
+                _git(worktree, "reset", "--hard", "HEAD")
+                _git(worktree, "clean", "-fd")
+                history.append(
+                    {
+                        "cycle": cycle,
+                        "status": "rejected",
+                        "reason": agent_result.summary,
+                        "mutation": mutation,
+                        "agent_turns": agent_result.turns,
                     }
                 )
                 continue
@@ -444,6 +425,8 @@ def autonomous_research(
                         "status": "accepted",
                         "mutation": mutation,
                         "comparison": comparison,
+                        "agent_summary": agent_result.summary,
+                        "agent_turns": agent_result.turns,
                     }
                 )
             else:
@@ -455,6 +438,8 @@ def autonomous_research(
                         "status": "rejected",
                         "mutation": mutation,
                         "comparison": comparison,
+                        "agent_summary": agent_result.summary,
+                        "agent_turns": agent_result.turns,
                     }
                 )
 

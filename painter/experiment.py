@@ -20,6 +20,7 @@ from painter.refine import (
 )
 from painter.renderer import render_strokes
 from painter.rich import (
+    paint_adaptive_rich_residual,
     paint_mixed_rich_residual,
     paint_polygon_rich_residual,
     paint_region_rich_residual,
@@ -36,7 +37,7 @@ from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Stroke, Tap
 from painter.structured import paint_structured_residual
 
 DEFAULT_BUDGETS = (100, 250, 500, 1000, 2000)
-METHODS = ("static", "residual", "structured", "rich_residual", "region_rich_residual", "polygon_rich_residual", "polygon_rich_refined_contour", "mixed_rich_residual", "mixed_rich_refined_positional", "region_rich_refined", "region_rich_refined_structure", "region_rich_refined_schedule", "refined", "refined_structure", "global_refined", "global_refined_structure", "staged_refined", "staged_refined_structure")
+METHODS = ("static", "residual", "structured", "rich_residual", "region_rich_residual", "polygon_rich_residual", "polygon_rich_refined_contour", "mixed_rich_residual", "adaptive_rich_residual", "mixed_rich_refined_positional", "region_rich_refined", "region_rich_refined_structure", "region_rich_refined_schedule", "refined", "refined_structure", "global_refined", "global_refined_structure", "staged_refined", "staged_refined_structure")
 
 
 def run_budget_experiment(
@@ -132,6 +133,14 @@ def run_budget_experiment(
             )
         elif method == "mixed_rich_residual":
             strokes, background = paint_mixed_rich_residual(
+                target_rgb,
+                palette,
+                budget,
+                seed=seed,
+            )
+            refinement = None
+        elif method == "adaptive_rich_residual":
+            strokes, background = paint_adaptive_rich_residual(
                 target_rgb,
                 palette,
                 budget,
@@ -302,6 +311,9 @@ def run_budget_experiment(
                 "continuous_color": refinement.continuous_color,
                 "stages": refinement.stages,
                 "sweeps": refinement.sweeps,
+                "accepted_by_raster": refinement.accepted_by_raster,
+                "raster_mse_before": refinement.raster_mse_before,
+                "raster_mse_after": refinement.raster_mse_after,
             }
         runs.append(run)
 

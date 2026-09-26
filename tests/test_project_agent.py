@@ -90,7 +90,7 @@ def test_openai_compatible_model_requests_json_mode(monkeypatch: pytest.MonkeyPa
 
         def read(self) -> bytes:
             return json.dumps(
-                {"choices": [{"message": {"content": "{\\\"action\\\":\\\"finish\\\"}"}}]}
+                {"choices": [{"message": {"content": "{\"action\":\"finish\"}"}}]}
             ).encode("utf-8")
 
     def fake_urlopen(request: Request, timeout: int) -> _Response:

@@ -9,7 +9,7 @@ from urllib.request import Request
 
 import pytest
 
-from painter.agent.agent import NeuralPainterAgent
+from painter.agent.agent import CODING_ACTION_RESPONSE_FORMAT, NeuralPainterAgent
 from painter.agent.model import OpenAICompatibleModel, parse_json_action
 from painter.agent.tools import ProjectTools
 
@@ -169,3 +169,64 @@ def test_agent_rejects_duplicate_inspection_until_source_change(tmp_path: Path) 
     duplicate_observation = transcript[3]["content"]
     assert duplicate_observation["ok"] is False
     assert "duplicate inspection action" in duplicate_observation["error"]
+
+
+def test_search_code_does_not_require_ripgrep(tmp_path: Path) -> None:
+    (tmp_path / "painter").mkdir()
+    (tmp_path / "painter" / "demo.py").write_text(
+        "def adaptive_allocator():\n    return 1\n",
+        encoding="utf-8",
+    )
+    tools = ProjectTools(tmp_path)
+
+    result = tools.search_code("adaptive_allocator")
+
+    assert "painter/demo.py:1:def adaptive_allocator():" in result
+
+
+def test_read_file_reports_range_and_eof_state(tmp_path: Path) -> None:
+    (tmp_path / "painter").mkdir()
+    (tmp_path / "painter" / "demo.py").write_text(
+        "one\ntwo\nthree\n",
+        encoding="utf-8",
+    )
+    tools = ProjectTools(tmp_path)
+
+    partial = tools.read_file("painter/demo.py", 1, 2)
+    complete = tools.read_file("painter/demo.py", 1, 3)
+
+    assert partial.startswith("[painter/demo.py lines 1-2 of 3; more lines available]")
+    assert complete.startswith("[painter/demo.py lines 1-3 of 3; EOF]")
+
+
+def test_agent_requests_coding_action_schema(tmp_path: Path) -> None:
+    (tmp_path / ".agent").mkdir()
+    (tmp_path / ".agent" / "RESEARCH_RULES.md").write_text(
+        "Implement one mutation at a time.\n",
+        encoding="utf-8",
+    )
+
+    class CapturingModel:
+        def __init__(self) -> None:
+            self.response_format: dict[str, object] | None = None
+
+        def complete(
+            self,
+            messages: list[dict[str, str]],
+            **kwargs: object,
+        ) -> str:
+            assert messages
+            value = kwargs.get("response_format")
+            assert isinstance(value, dict)
+            self.response_format = value
+            return '{"action":"finish","summary":"done"}'
+
+    model = CapturingModel()
+    agent = NeuralPainterAgent(model, tmp_path, max_turns=1)
+
+    result = agent.run("Finish immediately.", log_dir=tmp_path / "logs")
+
+    assert result.success
+    assert model.response_format == CODING_ACTION_RESPONSE_FORMAT
+    action_schema = CODING_ACTION_RESPONSE_FORMAT["json_schema"]["schema"]
+    assert "action" in action_schema["required"]

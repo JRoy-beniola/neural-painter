@@ -350,3 +350,22 @@ def test_agent_replays_native_tool_history(tmp_path: Path) -> None:
     assert tool_message["tool_name"] == "read_file"
     tool_payload = json.loads(str(tool_message["content"]))
     assert tool_payload["observation"]["ok"] is True
+
+
+def test_search_code_can_scope_and_fuzz_phrase(tmp_path: Path) -> None:
+    (tmp_path / "painter").mkdir()
+    (tmp_path / "painter" / "rich.py").write_text(
+        "def adaptive_primitive_fractions():\n    return (0.1, 0.2)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "painter" / "other.py").write_text(
+        "adaptive allocator prose\n",
+        encoding="utf-8",
+    )
+    tools = ProjectTools(tmp_path)
+
+    result = tools.search_code("adaptive allocator", "painter/rich.py")
+
+    assert "fuzzy token matches:" in result
+    assert "painter/rich.py:1:def adaptive_primitive_fractions():" in result
+    assert "painter/other.py" not in result

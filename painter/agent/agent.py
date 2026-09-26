@@ -158,7 +158,7 @@ You are not a general shell agent.
 
 You may use only these JSON actions:
 {"action":"read_file","path":"painter/x.py","start_line":1,"end_line":200}
-{"action":"search_code","query":"symbol or text"}
+{"action":"search_code","query":"short literal symbol","path":"painter/x.py"}
 {"action":"apply_patch","patch":"<unified git diff>"}
 {"action":"run_ruff"}
 {"action":"run_tests","target":"tests/test_x.py"}
@@ -169,6 +169,9 @@ Rules:
 - Return exactly one JSON object per turn. No markdown outside JSON.
 - Implement exactly one research mutation.
 - Read before editing.
+- search_code is literal, not regex. Use short identifier fragments such as "adaptive",
+  "fraction", or "component".
+- When the experiment locks an intervention area, scope search_code to that file first.
 - When locating a named mechanism or function, prefer search_code over repeatedly scanning
   the same file ranges.
 - Never repeat an identical read_file or search_code action unless a source patch has
@@ -398,7 +401,11 @@ class NeuralPainterAgent:
                 int(action["end_line"]) if action.get("end_line") is not None else None,
             )
         elif name == "search_code":
-            output = self.tools.search_code(str(action["query"]))
+            search_path = action.get("path")
+            output = self.tools.search_code(
+                str(action["query"]),
+                str(search_path) if search_path else None,
+            )
         elif name == "apply_patch":
             output = self.tools.apply_patch(str(action["patch"]))
         elif name == "run_ruff":

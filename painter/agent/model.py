@@ -29,10 +29,16 @@ CODING_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_code",
-            "description": "Search repository source for one short literal symbol or phrase.",
+            "description": (
+                "Search source using a short literal identifier or phrase. "
+                "This is not regex. Optionally scope to one file or directory."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {"query": {"type": "string"}},
+                "properties": {
+                    "query": {"type": "string"},
+                    "path": {"type": ["string", "null"]},
+                },
                 "required": ["query"],
             },
         },

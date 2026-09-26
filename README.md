@@ -608,3 +608,60 @@ mechanisms instead of repeatedly recommending work that already exists.
 
 Research summaries now expose separate category champions for reconstruction,
 boundary fidelity, clutter, and runtime alongside the Pareto frontier.
+
+
+## Autonomous code-mutating autoresearch
+
+`scripts/run_autoresearch_agent.py` closes the loop between diagnosis and source
+code. It requires a locally installed and authenticated Codex CLI and performs
+each mutation in an isolated git worktree.
+
+For every mutation cycle it:
+
+1. runs the normal autoresearch controller to establish the current frontier,
+2. takes the highest-priority code mutation proposed by the controller,
+3. invokes Codex non-interactively on exactly that bounded hypothesis,
+4. independently runs `ruff check .` and `pytest -q`,
+5. reruns the full autoresearch benchmark,
+6. compares reconstruction, SSIM, boundary fidelity, clutter, and runtime,
+7. commits the mutation only when the measured acceptance gate passes,
+8. otherwise hard-resets the worktree and records the rejection,
+9. repeats from the newly accepted codebase.
+
+The source checkout is never modified while candidate code is being evaluated.
+Accepted mutations accumulate on an `autoresearch/<timestamp>` branch. Use
+`--apply` only when you want the harness to fast-forward your current branch
+to the accepted autonomous branch after all mutation cycles finish.
+
+The source repository must be clean before starting.
+
+```bash
+python scripts/run_autoresearch_agent.py assets/inputs/fleur_de_lis.png \
+  --output-root outputs/autocode/fleur_v1 \
+  --mutation-cycles 3 \
+  --experiment-iterations 6 \
+  --budget 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --device cuda
+```
+
+After inspecting `outputs/autocode/fleur_v1/autocode_summary.json`, rerun with
+`--apply` if you want accepted mutations fast-forwarded automatically:
+
+```bash
+python scripts/run_autoresearch_agent.py assets/inputs/fleur_de_lis.png \
+  --output-root outputs/autocode/fleur_apply \
+  --mutation-cycles 3 \
+  --experiment-iterations 6 \
+  --budget 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --device cuda \
+  --apply
+```
+
+Set `NEURAL_PAINTER_CODEX` if the Codex executable is not named `codex`.
+The harness invokes Codex with structured JSONL output and full-auto filesystem
+editing inside the disposable worktree; independent test and benchmark gates
+remain outside the agent's control.

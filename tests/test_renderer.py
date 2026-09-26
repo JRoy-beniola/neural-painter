@@ -9,7 +9,7 @@ from painter.calibration import (
     rich_renderer_consistency,
 )
 from painter.renderer import render_strokes
-from painter.stroke import EllipsePatch, Stroke, TaperedStroke
+from painter.stroke import EllipsePatch, PolygonPatch, Stroke, TaperedStroke
 
 
 def horizontal_stroke(**overrides: object) -> Stroke:
@@ -123,3 +123,13 @@ def test_ordered_context_renderer_tracks_raster_renderer() -> None:
     assert metrics["patch_stage"]["ssim"] > 0.80
     assert metrics["stroke_stage"]["mse"] < 0.01
     assert metrics["stroke_stage"]["ssim"] > 0.85
+
+
+def test_renderer_supports_polygon_patch() -> None:
+    patch = PolygonPatch(
+        vertices=((0.2, 0.2), (0.8, 0.2), (0.8, 0.8), (0.2, 0.8)),
+        color=(0.0, 0.5, 1.0),
+        opacity=1.0,
+    )
+    image = render_strokes([patch], size=(64, 64), background=(0, 0, 0))
+    assert image.getpixel((32, 32)) != (0, 0, 0)

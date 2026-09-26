@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import difflib
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +19,10 @@ class FunctionContext:
     function_name: str
     start_line: int
     end_line: int
+    function_start_line: int
+    function_end_line: int
     source: str
+    function_source: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,12 +63,16 @@ def extract_function_context(
     start = max(1, node.lineno - context_lines)
     end = min(len(lines), node.end_lineno + context_lines)
     excerpt = "\n".join(lines[start - 1 : end]) + "\n"
+    function_source = "\n".join(lines[node.lineno - 1 : node.end_lineno]) + "\n"
     return FunctionContext(
         path=path,
         function_name=function_name,
         start_line=start,
         end_line=end,
+        function_start_line=node.lineno,
+        function_end_line=node.end_lineno,
         source=excerpt,
+        function_source=function_source,
     )
 
 
@@ -75,7 +83,7 @@ def build_mutation_prompt(
     baseline_metrics: dict[str, Any] | None = None,
     behavior_preserving: bool = False,
 ) -> str:
-    """Build a deliberately small prompt for one bounded code proposal."""
+    """Build a small prompt for one bounded replacement-function proposal."""
     metrics = baseline_metrics or {}
     constraint = (
         "The edit must preserve executable behavior. Change only a comment or docstring."
@@ -106,16 +114,21 @@ CONSTRAINTS:
 - Preserve the function signature and all public APIs.
 - Do not change evaluators, metrics, seeds, budgets, or experiment configuration.
 - {constraint}
-- Return exactly one standard unified diff beginning with --- a/{target.path}.
-- Do not use Markdown fences.
-- Do not explain the patch before or after the diff.
+- Return the complete replacement definition of {target.function_name}, starting with def.
+- Return Python source only: no unified diff, no Markdown fences, no explanation.
+- Do not include any other function or top-level code.
 
 SOURCE EXCERPT ({target.path}:{target.start_line}-{target.end_line}):
 {target.source}"""
 
 
-def parse_unified_diff(text: str) -> str:
-    """Extract a single unified diff while rejecting explanatory prose."""
+def parse_replacement_function(
+    text: str,
+    *,
+    function_name: str,
+    original_source: str,
+) -> str:
+    """Parse one replacement function and require an unchanged signature."""
     stripped = text.strip()
     if stripped.startswith("```"):
         lines = stripped.splitlines()[1:]
@@ -123,15 +136,65 @@ def parse_unified_diff(text: str) -> str:
             lines = lines[:-1]
         stripped = "\n".join(lines).strip()
 
-    start = stripped.find("--- a/")
+    marker = f"def {function_name}("
+    start = stripped.find(marker)
     if start < 0:
-        raise ValueError("model did not return a unified diff")
+        raise ValueError(f"model did not return {function_name!r} source")
     if stripped[:start].strip():
-        raise ValueError("model returned prose before the unified diff")
+        raise ValueError("model returned prose before the replacement function")
 
-    patch = stripped[start:].strip() + "\n"
-    if "\n+++ b/" not in patch or "\n@@" not in patch:
-        raise ValueError("model diff is missing required unified-diff headers")
+    replacement = stripped[start:].strip() + "\n"
+    try:
+        replacement_tree = ast.parse(replacement)
+        original_tree = ast.parse(original_source)
+    except SyntaxError as exc:
+        raise ValueError(f"model returned invalid Python: {exc.msg}") from exc
+
+    replacement_nodes = [
+        node
+        for node in replacement_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    original_nodes = [
+        node
+        for node in original_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    if len(replacement_tree.body) != 1 or len(replacement_nodes) != 1:
+        raise ValueError("model must return exactly the requested function")
+    if replacement_nodes[0].name != function_name:
+        raise ValueError("model returned the wrong function")
+    if len(original_nodes) != 1:
+        raise ValueError("original function source is malformed")
+    if ast.dump(replacement_nodes[0].args) != ast.dump(original_nodes[0].args):
+        raise ValueError("model changed the function signature")
+    return replacement
+
+
+def build_function_patch(
+    repo_root: Path,
+    target: FunctionContext,
+    replacement: str,
+) -> str:
+    """Construct a valid unified diff deterministically from replacement source."""
+    source_path = repo_root / target.path
+    before_lines = source_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    replacement_lines = replacement.splitlines(keepends=True)
+    after_lines = (
+        before_lines[: target.function_start_line - 1]
+        + replacement_lines
+        + before_lines[target.function_end_line :]
+    )
+    patch = "".join(
+        difflib.unified_diff(
+            before_lines,
+            after_lines,
+            fromfile=f"a/{target.path}",
+            tofile=f"b/{target.path}",
+        )
+    )
+    if not patch:
+        raise ValueError("model proposal did not change the target function")
     return patch
 
 
@@ -171,7 +234,7 @@ def propose_function_patch(
     baseline_metrics: dict[str, Any] | None = None,
     behavior_preserving: bool = False,
 ) -> MutationProposal:
-    """Ask the model once for one bounded patch and validate it without applying it."""
+    """Ask the model once for one bounded function replacement."""
     target = extract_function_context(repo_root, path, function_name)
     prompt = build_mutation_prompt(
         target,
@@ -184,14 +247,19 @@ def propose_function_patch(
             {
                 "role": "system",
                 "content": (
-                    "Return only the requested unified diff. "
+                    "Return only the complete replacement Python function. "
                     "Do not browse, plan aloud, or request more context."
                 ),
             },
             {"role": "user", "content": prompt},
         ]
     )
-    patch = parse_unified_diff(response)
+    replacement = parse_replacement_function(
+        response,
+        function_name=function_name,
+        original_source=target.function_source,
+    )
+    patch = build_function_patch(repo_root, target, replacement)
     validate_target_patch(repo_root, patch, target_path=path)
     return MutationProposal(
         model=model.model,

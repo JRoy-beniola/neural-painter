@@ -125,6 +125,10 @@ Rules:
 - Return exactly one JSON object per turn. No markdown outside JSON.
 - Implement exactly one research mutation.
 - Read before editing.
+- When locating a named mechanism or function, prefer search_code over repeatedly scanning
+  the same file ranges.
+- Never repeat an identical read_file or search_code action unless a source patch has
+  changed the repository since that inspection.
 - Prefer the smallest discriminating implementation.
 - Never weaken tests merely to make a change pass.
 - Never edit generated outputs.
@@ -215,6 +219,9 @@ class NeuralPainterAgent:
             {"role": "user", "content": task},
         ]
 
+        inspection_keys: set[str] = set()
+        source_changed = False
+
         with transcript_path.open("w", encoding="utf-8") as transcript:
             for turn in range(1, self.max_turns + 1):
                 raw = self.model.complete(messages)
@@ -225,7 +232,31 @@ class NeuralPainterAgent:
 
                 try:
                     action = parse_json_action(raw)
-                    observation = self._execute(action)
+                    name = action.get("action")
+                    inspection_key = (
+                        json.dumps(action, sort_keys=True, separators=(",", ":"))
+                        if name in {"read_file", "search_code"}
+                        else None
+                    )
+                    if inspection_key is not None and inspection_key in inspection_keys:
+                        observation = {
+                            "ok": False,
+                            "error": (
+                                "duplicate inspection action: this exact read/search already "
+                                "succeeded since the last source change. Do not repeat it."
+                            ),
+                            "progress_required": (
+                                "Search for a different symbol or range, apply the bounded "
+                                "patch, run focused tests, inspect git_diff, or finish."
+                            ),
+                        }
+                    else:
+                        observation = self._execute(action)
+                        if observation.get("ok") and inspection_key is not None:
+                            inspection_keys.add(inspection_key)
+                        if observation.get("ok") and name == "apply_patch":
+                            source_changed = True
+                            inspection_keys.clear()
                 except Exception as exc:  # noqa: BLE001
                     action = {"action": "invalid"}
                     observation = {
@@ -253,8 +284,18 @@ class NeuralPainterAgent:
                 messages.append(
                     {
                         "role": "user",
-                        "content": "TOOL OBSERVATION:\n"
-                        + json.dumps(observation, ensure_ascii=False),
+                        "content": (
+                            "TOOL OBSERVATION:\n"
+                            + json.dumps(observation, ensure_ascii=False)
+                            + "\nPROGRESS STATE:\n"
+                            + json.dumps(
+                                {
+                                    "source_changed": source_changed,
+                                    "unique_inspections_since_change": len(inspection_keys),
+                                    "turns_remaining": self.max_turns - turn,
+                                }
+                            )
+                        ),
                     }
                 )
 

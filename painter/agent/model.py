@@ -26,6 +26,7 @@ class OpenAICompatibleModel:
                 "messages": messages,
                 "temperature": 0.1,
                 "stream": False,
+                "response_format": {"type": "json_object"},
             }
         ).encode("utf-8")
         headers = {"Content-Type": "application/json"}
@@ -71,7 +72,7 @@ def parse_json_object(text: str) -> dict[str, Any]:
         start = stripped.find("{")
         end = stripped.rfind("}")
         if start < 0 or end <= start:
-            raise ValueError("model did not return a JSON action")
+            raise ValueError("model did not return a JSON object")
         value = json.loads(stripped[start : end + 1])
 
     if not isinstance(value, dict):

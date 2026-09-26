@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from painter.agent.agent import NeuralPainterAgent
-from painter.agent.model import parse_json_action
+from painter.agent.model import OpenAICompatibleModel, parse_json_action
 from painter.agent.tools import ProjectTools
 
 
@@ -73,3 +73,33 @@ def test_agent_can_read_then_finish(tmp_path: Path) -> None:
     assert result.success
     assert result.turns == 2
     assert result.transcript_path.exists()
+
+
+def test_openai_compatible_model_requests_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {"choices": [{"message": {"content": "{\\\"action\\\":\\\"finish\\\"}"}}]}
+            ).encode("utf-8")
+
+    def fake_urlopen(request: object, timeout: int) -> _Response:
+        del timeout
+        data = getattr(request, "data")
+        captured.update(json.loads(data.decode("utf-8")))
+        return _Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    model = OpenAICompatibleModel("http://localhost:11434/v1", "test-model")
+    result = model.complete([{"role": "user", "content": "Return JSON."}])
+
+    assert result == '{"action":"finish"}'
+    assert captured["response_format"] == {"type": "json_object"}

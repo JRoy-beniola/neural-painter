@@ -165,4 +165,24 @@ class EllipsePatch:
         _validate_unit_interval(self.opacity, "opacity")
 
 
-Primitive: TypeAlias = Stroke | TaperedStroke | EllipsePatch
+Primitive: TypeAlias = Stroke | TaperedStroke | EllipsePatch | PolygonPatch
+
+
+
+@dataclass(frozen=True, slots=True)
+class PolygonPatch:
+    """Filled polygonal region primitive for arbitrary local image masses."""
+
+    vertices: tuple[Point, ...]
+    color: RGB
+    opacity: float = 1.0
+
+    def __post_init__(self) -> None:
+        if len(self.vertices) < 3:
+            raise ValueError("vertices must contain at least three points")
+        if len(self.vertices) > 32:
+            raise ValueError("vertices must contain at most 32 points")
+        for index, point in enumerate(self.vertices):
+            _validate_point(point, f"vertices[{index}]")
+        _validate_rgb(self.color)
+        _validate_unit_interval(self.opacity, "opacity")

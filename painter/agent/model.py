@@ -57,11 +57,11 @@ class OpenAICompatibleModel:
 def parse_json_action(text: str) -> dict[str, Any]:
     """Parse a single JSON action, tolerating fenced JSON output."""
     stripped = text.strip()
-    if stripped.startswith("~~~"):
+    if stripped.startswith(("~~~", "```")):
         lines = stripped.splitlines()
-        if lines and lines[0].startswith("~~~"):
+        if lines and lines[0].startswith(("~~~", "```")):
             lines = lines[1:]
-        if lines and lines[-1].strip() == "~~~":
+        if lines and lines[-1].strip() in {"~~~", "```"}:
             lines = lines[:-1]
         stripped = "\n".join(lines).strip()
 

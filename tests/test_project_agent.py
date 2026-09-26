@@ -139,3 +139,33 @@ def test_openai_compatible_model_rejects_empty_content(
     model = OpenAICompatibleModel("http://localhost:11434/v1", "test-model")
     with pytest.raises(RuntimeError, match="empty assistant content"):
         model.complete([{"role": "user", "content": "Return JSON."}])
+
+
+def test_agent_rejects_duplicate_inspection_until_source_change(tmp_path: Path) -> None:
+    (tmp_path / "painter").mkdir()
+    (tmp_path / "painter" / "demo.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (tmp_path / ".agent").mkdir()
+    (tmp_path / ".agent" / "RESEARCH_RULES.md").write_text(
+        "Implement one mutation at a time.\n",
+        encoding="utf-8",
+    )
+
+    model = FakeModel(
+        [
+            '{"action":"read_file","path":"painter/demo.py"}',
+            '{"action":"read_file","path":"painter/demo.py"}',
+            '{"action":"finish","summary":"stopped after duplicate guard"}',
+        ]
+    )
+    agent = NeuralPainterAgent(model, tmp_path, max_turns=4)
+
+    result = agent.run("Inspect without looping.", log_dir=tmp_path / "logs")
+    transcript = [
+        json.loads(line)
+        for line in result.transcript_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert result.success
+    duplicate_observation = transcript[3]["content"]
+    assert duplicate_observation["ok"] is False
+    assert "duplicate inspection action" in duplicate_observation["error"]

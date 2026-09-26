@@ -223,6 +223,31 @@ def _resolve_device(device: str) -> str:
     return device
 
 
+def _high_frequency_excess_loss(
+    rendered: torch.Tensor,
+    target: torch.Tensor,
+) -> torch.Tensor:
+    """Penalize excess fine-scale detail without suppressing target edge energy."""
+    gray_rendered = rendered.mean(dim=2)[None, None, :, :]
+    gray_target = target.mean(dim=2)[None, None, :, :]
+
+    blur_rendered = torch.nn.functional.avg_pool2d(
+        gray_rendered,
+        kernel_size=3,
+        stride=1,
+        padding=1,
+    )
+    blur_target = torch.nn.functional.avg_pool2d(
+        gray_target,
+        kernel_size=3,
+        stride=1,
+        padding=1,
+    )
+    high_rendered = torch.mean(torch.abs(gray_rendered - blur_rendered))
+    high_target = torch.mean(torch.abs(gray_target - blur_target)).detach()
+    return torch.relu(high_rendered - 1.05 * high_target) / (high_target + 1e-6)
+
+
 def _objective_loss(
     rendered: torch.Tensor,
     target: torch.Tensor,
@@ -251,11 +276,14 @@ def _objective_loss(
         return contour
     if target_edge_distance is None:
         target_edge_distance = _target_edge_distance(target)
-    return contour + 0.12 * _positional_contour_loss(
+    positional = contour + 0.12 * _positional_contour_loss(
         rendered,
         target,
         target_edge_distance,
     )
+    if objective == "positional_contour":
+        return positional
+    return positional + 0.08 * _high_frequency_excess_loss(rendered, target)
 
 
 def _validate_refinement_args(
@@ -273,9 +301,16 @@ def _validate_refinement_args(
         raise ValueError("lr must be positive")
     if optimization_resolution < 16:
         raise ValueError("optimization_resolution must be at least 16")
-    if objective not in {"mse", "structure", "contour", "positional_contour"}:
+    if objective not in {
+        "mse",
+        "structure",
+        "contour",
+        "positional_contour",
+        "contour_economy",
+    }:
         raise ValueError(
-            "objective must be one of: mse, structure, contour, positional_contour"
+            "objective must be one of: mse, structure, contour, "
+            "positional_contour, contour_economy"
         )
     if ssim_weight < 0.0 or edge_weight < 0.0:
         raise ValueError("structure loss weights must be non-negative")

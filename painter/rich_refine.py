@@ -20,11 +20,19 @@ from painter.refine import (
 )
 from painter.renderer import render_primitive_overlay, render_strokes
 from painter.rich import (
+    paint_adaptive_closed_region_residual,
     paint_mixed_rich_residual,
     paint_polygon_rich_residual,
     paint_region_rich_residual,
 )
-from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Primitive, TaperedStroke
+from painter.stroke import (
+    BezierRibbon,
+    ClosedBezierRegion,
+    EllipsePatch,
+    PolygonPatch,
+    Primitive,
+    TaperedStroke,
+)
 
 
 def _raster_segment_affine(
@@ -82,6 +90,7 @@ def refine_region_rich_primitives_ordered(
     geometry_bound: float = 0.03,
     optimize_geometry: bool = True,
     geometry_drift_weight: float = 0.0,
+    raster_checkpoint_interval: int = 10,
     initial_primitives: list[Primitive] | None = None,
     initial_background: tuple[int, int, int] | None = None,
 ) -> tuple[list[Primitive], tuple[int, int, int], RefinementStats]:
@@ -100,6 +109,8 @@ def refine_region_rich_primitives_ordered(
         raise ValueError("geometry_bound must lie in [0, 1]")
     if geometry_drift_weight < 0.0:
         raise ValueError("geometry_drift_weight must be non-negative")
+    if raster_checkpoint_interval < 1:
+        raise ValueError("raster_checkpoint_interval must be positive")
 
     if initial_primitives is None:
         primitives, background = paint_region_rich_residual(
@@ -119,7 +130,7 @@ def refine_region_rich_primitives_ordered(
     fixed_regions = [
         primitive
         for primitive in primitives
-        if isinstance(primitive, (PolygonPatch, BezierRibbon))
+        if isinstance(primitive, (PolygonPatch, BezierRibbon, ClosedBezierRegion))
     ]
     patches = [primitive for primitive in primitives if isinstance(primitive, EllipsePatch)]
     tapered = [primitive for primitive in primitives if isinstance(primitive, TaperedStroke)]
@@ -132,7 +143,7 @@ def refine_region_rich_primitives_ordered(
     target = torch.tensor(target_small, dtype=dtype, device=torch_device)
     target_edge_distance = (
         _target_edge_distance(target)
-        if objective == "positional_contour"
+        if objective in {"positional_contour", "contour_economy"}
         else None
     )
     height, width, _ = target_small.shape
@@ -158,6 +169,8 @@ def refine_region_rich_primitives_ordered(
     first_loss: float | None = None
     final_loss = 0.0
     refined_count = 0
+    raster_checkpoint_count = 0
+    best_raster_step: int | None = 0
     refined_patches = list(patches)
 
     # Patches occur before all tapered strokes in the rich painter. Preserve the
@@ -424,7 +437,43 @@ def refine_region_rich_primitives_ordered(
             with torch.no_grad():
                 first_loss = float(stroke_loss().item())
 
-        for _ in range(steps):
+        full_size = (image_rgb.shape[1], image_rgb.shape[0])
+        baseline_image = render_strokes(
+            [*fixed_regions, *refined_patches, *tapered],
+            size=full_size,
+            background=background,
+        )
+        baseline_rgb = np.asarray(baseline_image, dtype=np.float32) / 255.0
+        best_checkpoint_mse = float(np.mean((image_rgb - baseline_rgb) ** 2))
+        best_checkpoint_state: tuple[
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+        ] | None = None
+
+        def checkpoint_program() -> list[TaperedStroke]:
+            with torch.no_grad():
+                cp0, cp1, cp2 = stroke_geometry()
+                program = list(tapered)
+                for local_index, stroke_index in enumerate(selected_indices):
+                    program[stroke_index] = TaperedStroke(
+                        p0=tuple(float(v) for v in cp0[local_index].cpu().tolist()),
+                        p1=tuple(float(v) for v in cp1[local_index].cpu().tolist()),
+                        p2=tuple(float(v) for v in cp2[local_index].cpu().tolist()),
+                        width_start=float(width_start[local_index].cpu().item()),
+                        width_mid=float(width_mid[local_index].cpu().item()),
+                        width_end=float(width_end[local_index].cpu().item()),
+                        color=tuple(float(v) for v in colors[local_index].cpu().tolist()),
+                        opacity=float(opacities[local_index].cpu().item()),
+                    )
+                return program
+
+        for step_index in range(1, steps + 1):
             optimizer.zero_grad()
             loss = stroke_loss()
             loss.backward()
@@ -436,21 +485,61 @@ def refine_region_rich_primitives_ordered(
                 colors.clamp_(0.0, 1.0)
                 opacities.clamp_(0.20, 1.0)
 
+            should_checkpoint = (
+                step_index % raster_checkpoint_interval == 0
+                or step_index == steps
+            )
+            if should_checkpoint:
+                checkpoint_tapered = checkpoint_program()
+                checkpoint_image = render_strokes(
+                    [*fixed_regions, *refined_patches, *checkpoint_tapered],
+                    size=full_size,
+                    background=background,
+                )
+                checkpoint_rgb = np.asarray(checkpoint_image, dtype=np.float32) / 255.0
+                checkpoint_mse = float(np.mean((image_rgb - checkpoint_rgb) ** 2))
+                raster_checkpoint_count += 1
+                if checkpoint_mse < best_checkpoint_mse:
+                    with torch.no_grad():
+                        cp0, cp1, cp2 = stroke_geometry()
+                        best_checkpoint_state = (
+                            cp0.detach().cpu().clone(),
+                            cp1.detach().cpu().clone(),
+                            cp2.detach().cpu().clone(),
+                            width_start.detach().cpu().clone(),
+                            width_mid.detach().cpu().clone(),
+                            width_end.detach().cpu().clone(),
+                            colors.detach().cpu().clone(),
+                            opacities.detach().cpu().clone(),
+                        )
+                    best_checkpoint_mse = checkpoint_mse
+                    best_raster_step = step_index
+
         with torch.no_grad():
             final_loss = float(stroke_loss().item())
-            final_p0, final_p1, final_p2 = stroke_geometry()
 
-        for local_index, stroke_index in enumerate(selected_indices):
-            refined_tapered[stroke_index] = TaperedStroke(
-                p0=tuple(float(v) for v in final_p0[local_index].cpu().tolist()),
-                p1=tuple(float(v) for v in final_p1[local_index].cpu().tolist()),
-                p2=tuple(float(v) for v in final_p2[local_index].cpu().tolist()),
-                width_start=float(width_start[local_index].cpu().item()),
-                width_mid=float(width_mid[local_index].cpu().item()),
-                width_end=float(width_end[local_index].cpu().item()),
-                color=tuple(float(v) for v in colors[local_index].cpu().tolist()),
-                opacity=float(opacities[local_index].cpu().item()),
-            )
+        if best_checkpoint_state is not None:
+            (
+                best_p0,
+                best_p1,
+                best_p2,
+                best_width_start,
+                best_width_mid,
+                best_width_end,
+                best_colors,
+                best_opacities,
+            ) = best_checkpoint_state
+            for local_index, stroke_index in enumerate(selected_indices):
+                refined_tapered[stroke_index] = TaperedStroke(
+                    p0=tuple(float(v) for v in best_p0[local_index].tolist()),
+                    p1=tuple(float(v) for v in best_p1[local_index].tolist()),
+                    p2=tuple(float(v) for v in best_p2[local_index].tolist()),
+                    width_start=float(best_width_start[local_index].item()),
+                    width_mid=float(best_width_mid[local_index].item()),
+                    width_end=float(best_width_end[local_index].item()),
+                    color=tuple(float(v) for v in best_colors[local_index].tolist()),
+                    opacity=float(best_opacities[local_index].item()),
+                )
         refined_count += len(selected_indices)
 
     candidate_program: list[Primitive] = [
@@ -489,6 +578,8 @@ def refine_region_rich_primitives_ordered(
         accepted_by_raster=accepted_by_raster,
         raster_mse_before=raster_mse_before,
         raster_mse_after=raster_mse_after,
+        raster_checkpoints=raster_checkpoint_count,
+        best_raster_step=best_raster_step,
     )
     return final_program, background, stats
 
@@ -644,6 +735,47 @@ def refine_mixed_rich_primitives_ordered(
         objective="positional_contour",
         geometry_bound=geometry_bound,
         optimize_geometry=True,
+        initial_primitives=primitives,
+        initial_background=background,
+    )
+
+
+
+def refine_adaptive_closed_region_primitives(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    total_primitives: int,
+    *,
+    seed: int = 0,
+    steps: int = 40,
+    lr: float = 0.01,
+    max_refine_strokes: int = 256,
+    optimization_resolution: int = 96,
+    device: str = "auto",
+    geometry_bound: float = 0.015,
+    raster_checkpoint_interval: int = 10,
+) -> tuple[list[Primitive], tuple[int, int, int], RefinementStats]:
+    """Refine detail strokes over adaptive smooth closed-region structure."""
+    primitives, background = paint_adaptive_closed_region_residual(
+        image_rgb,
+        palette,
+        total_primitives,
+        seed=seed,
+    )
+    return refine_region_rich_primitives_ordered(
+        image_rgb,
+        palette,
+        total_primitives,
+        seed=seed,
+        steps=steps,
+        lr=lr,
+        max_refine_strokes=max_refine_strokes,
+        optimization_resolution=optimization_resolution,
+        device=device,
+        objective="contour_economy",
+        geometry_bound=geometry_bound,
+        optimize_geometry=True,
+        raster_checkpoint_interval=raster_checkpoint_interval,
         initial_primitives=primitives,
         initial_background=background,
     )

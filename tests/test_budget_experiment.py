@@ -337,3 +337,48 @@ def test_mixed_rich_refined_positional_writes_output(tmp_path) -> None:
     assert refinement["objective"] == "positional_contour"
     assert refinement["final_loss"] <= refinement["initial_loss"]
     assert (output_dir / "painted_8.png").exists()
+
+
+
+def test_adaptive_rich_residual_writes_primitive_diagnostics(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "adaptive_rich"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=29,
+        budgets=[8],
+        method="adaptive_rich_residual",
+    )
+
+    run = report["runs"][0]
+    assert run["stroke_count"] == 8
+    assert sum(run["primitive_counts"].values()) == 8
+    assert "largest_residual_component_fraction" in run["diagnostics"]
+
+
+def test_rich_refinement_records_real_raster_acceptance(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "raster_gate"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=31,
+        budgets=[8],
+        method="region_rich_refined_structure",
+        optimized_stroke_count=3,
+        geometry_bound=0.02,
+    )
+
+    refinement = report["runs"][0]["refinement"]
+    assert isinstance(refinement["accepted_by_raster"], bool)
+    assert refinement["raster_mse_before"] is not None
+    assert refinement["raster_mse_after"] is not None
+    if not refinement["accepted_by_raster"]:
+        assert report["runs"][0]["mse"] <= refinement["raster_mse_after"] + 1e-8

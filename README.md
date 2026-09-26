@@ -584,3 +584,27 @@ python scripts/run_autoresearch.py assets/inputs/fleur_de_lis.png \
   --seed 0 \
   --device cuda
 ```
+
+
+### Diagnostic reliability and capability-aware planning
+
+Autoresearch diagnostics no longer define high-error residuals by a fixed percentile.
+Residual topology now uses a robust absolute threshold based on the residual median
+and median absolute deviation, then reports:
+
+- fraction of pixels with meaningful residual error,
+- connected-component count,
+- largest component area fraction,
+- largest component share of total residual energy,
+- largest component eccentricity.
+
+High-frequency clutter is localized into target-boundary, foreground-interior,
+and exterior regions rather than represented by one global ratio.
+
+The controller is also capability-aware. Implemented mechanisms such as closed
+Bezier regions, contour-economy loss, adaptive allocation, and real-raster
+checkpointing are tagged explicitly, so mutation proposals advance those
+mechanisms instead of repeatedly recommending work that already exists.
+
+Research summaries now expose separate category champions for reconstruction,
+boundary fidelity, clutter, and runtime alongside the Pareto frontier.

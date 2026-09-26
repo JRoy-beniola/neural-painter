@@ -45,17 +45,24 @@ EXPERIMENT_RESPONSE_FORMAT = {
                         "ssim",
                         "boundary_f1",
                         "boundary_distance",
+                        "high_frequency_ratio",
+                        "high_frequency_boundary_ratio",
+                        "high_frequency_interior_ratio",
+                        "high_frequency_exterior_ratio",
                         "runtime_ms",
                     ],
                 },
                 "expected_direction": {
                     "type": "string",
-                    "enum": ["lower", "higher"],
+                    "enum": ["lower", "higher", "toward_target"],
                 },
                 "min_effect_fraction": {
                     "type": "number",
                     "minimum": 0.0,
                     "maximum": 1.0,
+                },
+                "target_value": {
+                    "type": ["number", "null"],
                 },
             },
             "required": [
@@ -68,6 +75,7 @@ EXPERIMENT_RESPONSE_FORMAT = {
                 "primary_metric",
                 "expected_direction",
                 "min_effect_fraction",
+                "target_value",
             ],
         },
     },
@@ -85,14 +93,17 @@ Return one JSON object and nothing else with this schema:
   "falsifier": "what result would count against the claim",
   "intervention": {"area": "repo/path.py", "change": "one bounded change"},
   "controls": ["what must stay fixed"],
-  "primary_metric": "mse|ssim|boundary_f1|boundary_distance|runtime_ms",
-  "expected_direction": "lower|higher",
-  "min_effect_fraction": 0.001
+  "primary_metric": "mse|ssim|boundary_f1|boundary_distance|high_frequency_ratio|high_frequency_boundary_ratio|high_frequency_interior_ratio|high_frequency_exterior_ratio|runtime_ms",
+  "expected_direction": "lower|higher|toward_target",
+  "min_effect_fraction": 0.001,
+  "target_value": "number for toward_target, otherwise null"
 }
 
 Do not propose multiple simultaneous mechanisms. The intervention must remain inside the
-provided diagnostic lead and repository scope. Choose a primary metric that directly tests
-the prediction rather than whichever metric is easiest to improve.
+provided diagnostic lead and repository scope. Choose a primary metric that directly tests the prediction rather than whichever metric
+is easiest to improve. For any high_frequency_*_ratio metric, use
+expected_direction="toward_target" and target_value=1.0. For all other metrics,
+target_value must be null.
 """
 
 

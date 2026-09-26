@@ -314,3 +314,26 @@ def test_polygon_rich_refined_contour_writes_output(tmp_path) -> None:
     assert refinement["objective"] == "contour"
     assert refinement["final_loss"] <= refinement["initial_loss"]
     assert (output_dir / "painted_8.png").exists()
+
+
+def test_mixed_rich_refined_positional_writes_output(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "mixed_rich"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=23,
+        budgets=[8],
+        method="mixed_rich_refined_positional",
+        optimized_stroke_count=3,
+        geometry_bound=0.02,
+    )
+
+    assert report["method"] == "mixed_rich_refined_positional"
+    refinement = report["runs"][0]["refinement"]
+    assert refinement["objective"] == "positional_contour"
+    assert refinement["final_loss"] <= refinement["initial_loss"]
+    assert (output_dir / "painted_8.png").exists()

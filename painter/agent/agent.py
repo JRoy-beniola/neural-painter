@@ -11,6 +11,70 @@ from painter.agent.model import OpenAICompatibleModel, parse_json_action, parse_
 from painter.agent.protocol import ExperimentDraft, parse_experiment_draft
 from painter.agent.tools import ProjectTools
 
+EXPERIMENT_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "experiment_draft",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "question": {"type": "string", "minLength": 1},
+                "hypothesis": {"type": "string", "minLength": 1},
+                "prediction": {"type": "string", "minLength": 1},
+                "falsifier": {"type": "string", "minLength": 1},
+                "intervention": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "area": {"type": "string", "minLength": 1},
+                        "change": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["area", "change"],
+                },
+                "controls": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1},
+                },
+                "primary_metric": {
+                    "type": "string",
+                    "enum": [
+                        "mse",
+                        "ssim",
+                        "boundary_f1",
+                        "boundary_distance",
+                        "high_frequency_ratio",
+                        "runtime_ms",
+                    ],
+                },
+                "expected_direction": {
+                    "type": "string",
+                    "enum": ["lower", "higher"],
+                },
+                "min_effect_fraction": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                },
+            },
+            "required": [
+                "question",
+                "hypothesis",
+                "prediction",
+                "falsifier",
+                "intervention",
+                "controls",
+                "primary_metric",
+                "expected_direction",
+                "min_effect_fraction",
+            ],
+        },
+    },
+}
+
+
 EXPERIMENT_PLANNER_PROMPT = """You are the research-planning role of NeuralPainterAgent.
 
 Turn one current diagnostic lead into exactly one falsifiable, controlled experiment.
@@ -113,7 +177,8 @@ class NeuralPainterAgent:
                     "role": "user",
                     "content": json.dumps(payload, ensure_ascii=False, indent=2),
                 },
-            ]
+            ],
+            response_format=EXPERIMENT_RESPONSE_FORMAT,
         )
         draft = parse_experiment_draft(parse_json_object(raw))
         expected_area = mutation.get("area", "").strip()

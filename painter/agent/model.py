@@ -169,9 +169,11 @@ class OpenAICompatibleModel:
                             fallback = None
                         if fallback is not None and fallback.get("action") == "finish":
                             return json.dumps(fallback)
-                    raise RuntimeError(
-                        "model endpoint returned no coding tool call"
-                        + (f": {content}" if content else "")
+                    return json.dumps(
+                        {
+                            "action": "invalid_model_response",
+                            "content": content,
+                        }
                     )
                 function = tool_calls[0]["function"]
                 name = str(function["name"])

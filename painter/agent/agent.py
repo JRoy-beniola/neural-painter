@@ -7,8 +7,31 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from painter.agent.model import OpenAICompatibleModel, parse_json_action
+from painter.agent.model import OpenAICompatibleModel, parse_json_action, parse_json_object
+from painter.agent.protocol import ExperimentDraft, parse_experiment_draft
 from painter.agent.tools import ProjectTools
+
+EXPERIMENT_PLANNER_PROMPT = """You are the research-planning role of NeuralPainterAgent.
+
+Turn one current diagnostic lead into exactly one falsifiable, controlled experiment.
+Return one JSON object and nothing else with this schema:
+{
+  "question": "one explicit unresolved question",
+  "hypothesis": "one mechanistic falsifiable claim",
+  "prediction": "what measurable change should occur if the claim is right",
+  "falsifier": "what result would count against the claim",
+  "intervention": {"area": "repo/path.py", "change": "one bounded change"},
+  "controls": ["what must stay fixed"],
+  "primary_metric": "mse|ssim|boundary_f1|boundary_distance|high_frequency_ratio|runtime_ms",
+  "expected_direction": "lower|higher",
+  "min_effect_fraction": 0.001
+}
+
+Do not propose multiple simultaneous mechanisms. The intervention must remain inside the
+provided diagnostic lead and repository scope. Choose a primary metric that directly tests
+the prediction rather than whichever metric is easiest to improve.
+"""
+
 
 SYSTEM_PROMPT = """You are NeuralPainterAgent, a narrowly scoped research coding agent.
 
@@ -61,6 +84,38 @@ class NeuralPainterAgent:
         self.model = model
         self.tools = ProjectTools(worktree)
         self.max_turns = max_turns
+
+    def propose_experiment(
+        self,
+        mutation: dict[str, str],
+        *,
+        baseline_summary: dict[str, Any],
+        research_state: dict[str, Any],
+    ) -> ExperimentDraft:
+        """Formulate one schema-validated preregisterable experiment."""
+        champion = baseline_summary.get("champion") or {}
+        metrics = champion.get("metrics") or {}
+        payload = {
+            "diagnostic_lead": mutation,
+            "current_champion": {
+                "method": champion.get("candidate", {}).get("method"),
+                "mse": metrics.get("mse"),
+                "ssim": metrics.get("ssim"),
+                "diagnostics": metrics.get("diagnostics", {}),
+            },
+            "active_diagnoses": baseline_summary.get("final_diagnoses") or [],
+            "research_state": research_state,
+        }
+        raw = self.model.complete(
+            [
+                {"role": "system", "content": EXPERIMENT_PLANNER_PROMPT},
+                {
+                    "role": "user",
+                    "content": json.dumps(payload, ensure_ascii=False, indent=2),
+                },
+            ]
+        )
+        return parse_experiment_draft(parse_json_object(raw))
 
     def run(self, task: str, *, log_dir: Path) -> AgentResult:
         log_dir.mkdir(parents=True, exist_ok=True)

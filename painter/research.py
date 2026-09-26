@@ -8,6 +8,8 @@ from pathlib import Path
 from time import time
 from typing import Any
 
+import numpy as np
+
 from painter.experiment import run_budget_experiment
 
 
@@ -147,6 +149,7 @@ def diagnose_run(run: dict[str, Any]) -> list[Diagnosis]:
 def candidate_library() -> tuple[ExperimentCandidate, ...]:
     """Safe search space over already-tested painter mechanisms."""
     return (
+        ExperimentCandidate("adaptive_rich_residual", optimized_stroke_count=None),
         ExperimentCandidate("polygon_rich_residual", optimized_stroke_count=None),
         ExperimentCandidate("mixed_rich_residual", optimized_stroke_count=None),
         ExperimentCandidate("region_rich_residual", optimized_stroke_count=None),
@@ -199,6 +202,8 @@ def _candidate_priority(
     codes = {diagnosis.code for diagnosis in diagnoses}
 
     if "global_structure" in codes or "capacity_allocation" in codes:
+        if candidate.method == "adaptive_rich_residual":
+            score += 6.0
         if candidate.method == "polygon_rich_residual":
             score += 5.0
         if candidate.method == "mixed_rich_residual":
@@ -276,6 +281,99 @@ def pareto_front(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return frontier
 
 
+def champion_record(
+    records: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Choose a stable champion from the current Pareto frontier.
+
+    The champion is selected lexicographically: pixel fidelity first, then SSIM,
+    boundary placement, edge-energy mismatch, and runtime.
+    """
+    frontier = pareto_front(records)
+    if not frontier:
+        return None
+
+    def key(record: dict[str, Any]) -> tuple[float, float, float, float, float]:
+        run = record["report"]["runs"][0]
+        diagnostics = run.get("diagnostics", {})
+        return (
+            float(run.get("mse", float("inf"))),
+            -float(run.get("ssim", 0.0)),
+            float(diagnostics.get("mean_boundary_distance_px", float("inf"))),
+            abs(float(diagnostics.get("edge_energy_ratio", 1.0)) - 1.0),
+            float(run.get("render_ms", float("inf"))),
+        )
+
+    return min(frontier, key=key)
+
+
+def frontier_diagnoses(
+    records: list[dict[str, Any]],
+) -> tuple[list[Diagnosis], list[Diagnosis]]:
+    """Return champion diagnoses and failures persistent across the Pareto frontier."""
+    frontier = pareto_front(records)
+    champion = champion_record(records)
+    champion_findings = (
+        diagnose_run(champion["report"]["runs"][0])
+        if champion is not None
+        else []
+    )
+    if not frontier:
+        return champion_findings, []
+
+    findings_by_record = [
+        diagnose_run(record["report"]["runs"][0])
+        for record in frontier
+    ]
+    threshold = max(1, (len(frontier) + 1) // 2)
+    counts: dict[str, int] = {}
+    severities: dict[str, list[float]] = {}
+    examples: dict[str, Diagnosis] = {}
+    for findings in findings_by_record:
+        seen: set[str] = set()
+        for finding in findings:
+            if finding.code in seen:
+                continue
+            seen.add(finding.code)
+            counts[finding.code] = counts.get(finding.code, 0) + 1
+            severities.setdefault(finding.code, []).append(finding.severity)
+            current = examples.get(finding.code)
+            if current is None or finding.severity > current.severity:
+                examples[finding.code] = finding
+
+    persistent: list[Diagnosis] = []
+    for code, count in counts.items():
+        if count < threshold:
+            continue
+        example = examples[code]
+        persistent.append(
+            Diagnosis(
+                code=code,
+                severity=float(np.mean(severities[code])),
+                evidence=(
+                    f"persistent on {count}/{len(frontier)} Pareto-front runs; "
+                    f"example: {example.evidence}"
+                ),
+                recommendation=example.recommendation,
+            )
+        )
+    persistent.sort(key=lambda item: item.severity, reverse=True)
+    return champion_findings, persistent
+
+
+def merge_diagnoses(
+    champion_findings: list[Diagnosis],
+    persistent_findings: list[Diagnosis],
+) -> list[Diagnosis]:
+    """Merge champion and persistent evidence without duplicating failure codes."""
+    merged: dict[str, Diagnosis] = {}
+    for finding in [*persistent_findings, *champion_findings]:
+        current = merged.get(finding.code)
+        if current is None or finding.severity > current.severity:
+            merged[finding.code] = finding
+    return sorted(merged.values(), key=lambda item: item.severity, reverse=True)
+
+
 def mutation_plan(diagnoses: list[Diagnosis]) -> list[dict[str, str]]:
     """Translate unresolved diagnoses into bounded code-level research proposals."""
     proposals: list[dict[str, str]] = []
@@ -287,8 +385,8 @@ def mutation_plan(diagnoses: list[Diagnosis]) -> list[dict[str, str]]:
                 "area": "painter/rich.py",
                 "hypothesis": "broad residual regions are underrepresented",
                 "change": (
-                    "add an allocator policy that adapts polygon/ribbon/detail fractions "
-                    "from residual connected-component geometry"
+                    "use the adaptive allocator and extend it only if frontier evidence "
+                    "shows coherent residual regions remain underrepresented"
                 ),
             }
         )
@@ -308,7 +406,8 @@ def mutation_plan(diagnoses: list[Diagnosis]) -> list[dict[str, str]]:
                 "area": "painter/rich_refine.py",
                 "hypothesis": "surrogate optimization is not transferring to the final raster",
                 "change": (
-                    "reject refinements unless a checkpointed real-raster evaluation improves"
+                    "real-raster acceptance is now mandatory; inspect any remaining "
+                    "surrogate mismatch only after rejected refinements are excluded"
                 ),
             }
         )
@@ -380,19 +479,26 @@ def run_autoresearch(
             cleanup_optimize_geometry=candidate.cleanup_optimize_geometry,
         )
         run = report["runs"][0]
-        diagnoses = diagnose_run(run)
+        last_run_diagnoses = diagnose_run(run)
         record = {
             "iteration": iteration,
             "timestamp": time(),
             "candidate": asdict(candidate),
             "report": report,
-            "diagnoses": [asdict(item) for item in diagnoses],
-            "mutation_plan": mutation_plan(diagnoses),
+            "diagnoses": [asdict(item) for item in last_run_diagnoses],
+            "mutation_plan": mutation_plan(last_run_diagnoses),
         }
         records.append(record)
+
+        champion_findings, persistent_findings = frontier_diagnoses(records)
+        diagnoses = merge_diagnoses(champion_findings, persistent_findings)
+        record["frontier_diagnoses"] = [asdict(item) for item in diagnoses]
         _append_jsonl(registry_path, record)
 
     frontier = pareto_front(records)
+    champion = champion_record(records)
+    champion_findings, persistent_findings = frontier_diagnoses(records)
+    active_findings = merge_diagnoses(champion_findings, persistent_findings)
     summary = {
         "image": str(image_path),
         "iterations_completed": len(records),
@@ -405,12 +511,23 @@ def run_autoresearch(
             }
             for record in frontier
         ],
-        "final_diagnoses": (
-            [asdict(item) for item in diagnoses]
-            if records
-            else []
+        "champion": (
+            {
+                "iteration": champion["iteration"],
+                "candidate": champion["candidate"],
+                "metrics": champion["report"]["runs"][0],
+            }
+            if champion is not None
+            else None
         ),
-        "recommended_code_mutations": mutation_plan(diagnoses) if records else [],
+        "champion_diagnoses": [asdict(item) for item in champion_findings],
+        "persistent_frontier_diagnoses": [
+            asdict(item) for item in persistent_findings
+        ],
+        "final_diagnoses": [asdict(item) for item in active_findings],
+        "recommended_code_mutations": (
+            mutation_plan(active_findings) if records else []
+        ),
         "registry": str(registry_path),
     }
     with (output_root / "research_summary.json").open("w", encoding="utf-8") as handle:

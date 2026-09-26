@@ -27,7 +27,7 @@ class _FakeModel:
         metric_schema = response_format["json_schema"]["schema"]["properties"][
             "primary_metric"
         ]
-        assert "high_frequency_exterior_ratio" not in metric_schema["enum"]
+        assert "high_frequency_exterior_ratio" in metric_schema["enum"]
         return json.dumps(self.payload)
 
 
@@ -48,6 +48,7 @@ def _protocol(*, direction: str = "lower", epsilon: float = 0.01) -> ExperimentP
         primary_metric="mse",
         expected_direction=direction,  # type: ignore[arg-type]
         min_effect_fraction=epsilon,
+        target_value=None,
         locked_at="2026-09-26T08:00:00+00:00",
     )
 
@@ -116,6 +117,7 @@ def test_agent_planner_returns_validated_experiment_draft(tmp_path) -> None:
         "primary_metric": "mse",
         "expected_direction": "lower",
         "min_effect_fraction": 0.001,
+        "target_value": None,
     }
     agent = NeuralPainterAgent(_FakeModel(payload), tmp_path)
 
@@ -161,3 +163,39 @@ def test_agent_cannot_patch_its_own_scientific_infrastructure(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="protected file"):
         tools.apply_patch(patch)
+
+
+def test_prediction_evaluation_supports_toward_target_metric() -> None:
+    protocol = ExperimentProtocol(
+        **{
+            **_protocol().to_dict(),
+            "primary_metric": "high_frequency_exterior_ratio",
+            "expected_direction": "toward_target",
+            "target_value": 1.0,
+        }
+    )
+
+    assert evaluate_prediction(
+        protocol,
+        {"high_frequency_exterior_ratio": 30.0},
+        {"high_frequency_exterior_ratio": 20.0},
+    ) == "supports"
+    assert evaluate_prediction(
+        protocol,
+        {"high_frequency_exterior_ratio": 30.0},
+        {"high_frequency_exterior_ratio": 35.0},
+    ) == "weakens"
+
+
+def test_toward_target_requires_target_value() -> None:
+    protocol = ExperimentProtocol(
+        **{
+            **_protocol().to_dict(),
+            "primary_metric": "high_frequency_exterior_ratio",
+            "expected_direction": "toward_target",
+            "target_value": None,
+        }
+    )
+
+    with pytest.raises(ValueError, match="target_value is required"):
+        protocol.validate()

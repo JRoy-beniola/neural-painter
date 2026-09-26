@@ -9,7 +9,6 @@ from time import time
 from typing import Any
 
 import numpy as np
-
 from painter.experiment import run_budget_experiment
 
 

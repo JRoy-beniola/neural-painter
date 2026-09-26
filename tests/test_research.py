@@ -11,7 +11,9 @@ from painter.diagnostics import image_diagnostics
 from painter.research import (
     Diagnosis,
     ExperimentCandidate,
+    champion_record,
     diagnose_run,
+    frontier_diagnoses,
     mutation_plan,
     pareto_front,
     run_autoresearch,
@@ -154,3 +156,78 @@ def test_run_autoresearch_writes_registry_and_summary(tmp_path) -> None:
         for record in map(json.loads, lines)
     }
     assert len(attempted) == 2
+
+
+
+def test_frontier_diagnoses_use_champion_not_last_run() -> None:
+    champion = {
+        "iteration": 0,
+        "candidate": {"method": "region_rich_residual"},
+        "report": {
+            "runs": [
+                {
+                    "mse": 0.01,
+                    "ssim": 0.86,
+                    "render_ms": 10.0,
+                    "diagnostics": {
+                        "foreground_iou": 0.90,
+                        "boundary_f1": 0.40,
+                        "mean_boundary_distance_px": 5.0,
+                        "edge_energy_ratio": 1.05,
+                        "high_frequency_ratio": 1.8,
+                        "largest_residual_component_fraction": 0.10,
+                    },
+                }
+            ]
+        },
+    }
+    last = {
+        "iteration": 1,
+        "candidate": {"method": "mixed_rich_refined_positional"},
+        "report": {
+            "runs": [
+                {
+                    "mse": 0.02,
+                    "ssim": 0.80,
+                    "render_ms": 30.0,
+                    "diagnostics": {
+                        "foreground_iou": 0.70,
+                        "boundary_f1": 0.30,
+                        "mean_boundary_distance_px": 8.0,
+                        "edge_energy_ratio": 2.0,
+                        "high_frequency_ratio": 2.5,
+                        "largest_residual_component_fraction": 0.15,
+                    },
+                }
+            ]
+        },
+    }
+
+    records = [champion, last]
+    assert champion_record(records) is champion
+    champion_findings, _ = frontier_diagnoses(records)
+    codes = {finding.code for finding in champion_findings}
+    assert "global_structure" not in codes
+    assert "boundary_placement" in codes
+
+
+def test_autoresearch_bootstraps_with_adaptive_allocator(tmp_path) -> None:
+    image_path = tmp_path / "input.png"
+    image = np.zeros((24, 24, 3), dtype=np.uint8)
+    image[5:19, 7:17] = (200, 220, 250)
+    Image.fromarray(image, mode="RGB").save(image_path)
+
+    summary = run_autoresearch(
+        image_path,
+        tmp_path / "adaptive_research",
+        iterations=1,
+        budget=8,
+        palette_size=2,
+        seed=5,
+        device="cpu",
+    )
+
+    assert summary["champion"] is not None
+    assert summary["champion"]["candidate"]["method"] == "adaptive_rich_residual"
+    assert "champion_diagnoses" in summary
+    assert "persistent_frontier_diagnoses" in summary

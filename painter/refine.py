@@ -93,24 +93,73 @@ def _ssim_loss(rendered: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     return 1.0 - torch.clamp(score.mean(), 0.0, 1.0)
 
 
-def _edge_loss(rendered: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    """Match Sobel edge magnitude between rendered and target images."""
-    x = rendered.mean(dim=2)[None, None, :, :]
-    y = target.mean(dim=2)[None, None, :, :]
+def _multi_scale_ssim_loss(
+    rendered: torch.Tensor,
+    target: torch.Tensor,
+) -> torch.Tensor:
+    """Average SSIM loss over native, half, and quarter resolutions."""
+    losses: list[torch.Tensor] = []
+    x = rendered
+    y = target
+    for _ in range(3):
+        losses.append(_ssim_loss(x, y))
+        if min(x.shape[0], x.shape[1]) < 16:
+            break
+        x_chw = x.permute(2, 0, 1).unsqueeze(0)
+        y_chw = y.permute(2, 0, 1).unsqueeze(0)
+        x = torch.nn.functional.avg_pool2d(x_chw, 2, stride=2).squeeze(0).permute(1, 2, 0)
+        y = torch.nn.functional.avg_pool2d(y_chw, 2, stride=2).squeeze(0).permute(1, 2, 0)
+    return torch.stack(losses).mean()
 
+
+def _sobel_components(image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    gray = image.mean(dim=2)[None, None, :, :]
     sobel_x = torch.tensor(
         [[[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]]],
-        dtype=rendered.dtype,
-        device=rendered.device,
+        dtype=image.dtype,
+        device=image.device,
     ).unsqueeze(0)
     sobel_y = sobel_x.transpose(-1, -2)
+    gx = torch.nn.functional.conv2d(gray, sobel_x, padding=1)
+    gy = torch.nn.functional.conv2d(gray, sobel_y, padding=1)
+    return gx, gy
 
-    def magnitude(image: torch.Tensor) -> torch.Tensor:
-        gx = torch.nn.functional.conv2d(image, sobel_x, padding=1)
-        gy = torch.nn.functional.conv2d(image, sobel_y, padding=1)
-        return torch.sqrt(gx * gx + gy * gy + 1e-8)
 
-    return torch.mean(torch.abs(magnitude(x) - magnitude(y)))
+def _edge_loss(rendered: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Match Sobel edge magnitude between rendered and target images."""
+    gx_rendered, gy_rendered = _sobel_components(rendered)
+    gx_target, gy_target = _sobel_components(target)
+    magnitude_rendered = torch.sqrt(gx_rendered * gx_rendered + gy_rendered * gy_rendered + 1e-8)
+    magnitude_target = torch.sqrt(gx_target * gx_target + gy_target * gy_target + 1e-8)
+    return torch.mean(torch.abs(magnitude_rendered - magnitude_target))
+
+
+def _edge_orientation_loss(rendered: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Align local edge direction, weighted toward strong target contours."""
+    gx_rendered, gy_rendered = _sobel_components(rendered)
+    gx_target, gy_target = _sobel_components(target)
+    mag_rendered = torch.sqrt(gx_rendered * gx_rendered + gy_rendered * gy_rendered + 1e-8)
+    mag_target = torch.sqrt(gx_target * gx_target + gy_target * gy_target + 1e-8)
+
+    dot = gx_rendered * gx_target + gy_rendered * gy_target
+    cosine = dot / (mag_rendered * mag_target + 1e-6)
+    weight = mag_target / (mag_target.mean().detach() + 1e-6)
+    weight = torch.clamp(weight, 0.0, 4.0)
+    return torch.mean(weight * (1.0 - torch.clamp(cosine, -1.0, 1.0)))
+
+
+def _laplacian_loss(rendered: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Match second-order local structure to discourage fuzzy edge halos."""
+    kernel = torch.tensor(
+        [[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]],
+        dtype=rendered.dtype,
+        device=rendered.device,
+    )[None, None, :, :]
+    x = rendered.mean(dim=2)[None, None, :, :]
+    y = target.mean(dim=2)[None, None, :, :]
+    lx = torch.nn.functional.conv2d(x, kernel, padding=1)
+    ly = torch.nn.functional.conv2d(y, kernel, padding=1)
+    return torch.mean(torch.abs(lx - ly))
 
 
 def _resolve_device(device: str) -> str:
@@ -134,9 +183,17 @@ def _objective_loss(
     mse = torch.mean((rendered - target) ** 2)
     if objective == "mse":
         return mse
-    return mse + ssim_weight * _ssim_loss(rendered, target) + edge_weight * _edge_loss(
-        rendered,
-        target,
+    if objective == "structure":
+        return mse + ssim_weight * _ssim_loss(rendered, target) + edge_weight * _edge_loss(
+            rendered,
+            target,
+        )
+    return (
+        mse
+        + ssim_weight * _multi_scale_ssim_loss(rendered, target)
+        + edge_weight * _edge_loss(rendered, target)
+        + 0.05 * _edge_orientation_loss(rendered, target)
+        + 0.05 * _laplacian_loss(rendered, target)
     )
 
 
@@ -155,8 +212,8 @@ def _validate_refinement_args(
         raise ValueError("lr must be positive")
     if optimization_resolution < 16:
         raise ValueError("optimization_resolution must be at least 16")
-    if objective not in {"mse", "structure"}:
-        raise ValueError("objective must be one of: mse, structure")
+    if objective not in {"mse", "structure", "contour"}:
+        raise ValueError("objective must be one of: mse, structure, contour")
     if ssim_weight < 0.0 or edge_weight < 0.0:
         raise ValueError("structure loss weights must be non-negative")
 

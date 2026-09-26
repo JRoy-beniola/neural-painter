@@ -231,3 +231,56 @@ def test_autoresearch_bootstraps_with_adaptive_allocator(tmp_path) -> None:
     assert summary["champion"]["candidate"]["method"] == "adaptive_rich_residual"
     assert "champion_diagnoses" in summary
     assert "persistent_frontier_diagnoses" in summary
+
+
+
+def test_single_frontier_member_is_not_called_persistent() -> None:
+    record = {
+        "iteration": 0,
+        "candidate": {"method": "region_rich_residual"},
+        "report": {
+            "runs": [
+                {
+                    "mse": 0.01,
+                    "ssim": 0.85,
+                    "render_ms": 12.0,
+                    "diagnostics": {
+                        "foreground_iou": 0.90,
+                        "boundary_f1": 0.42,
+                        "mean_boundary_distance_px": 4.5,
+                        "edge_energy_ratio": 1.05,
+                        "high_frequency_ratio": 1.8,
+                        "largest_residual_component_fraction": 0.10,
+                    },
+                }
+            ]
+        },
+    }
+
+    champion_findings, persistent = frontier_diagnoses([record])
+    assert champion_findings
+    assert persistent == []
+
+
+def test_autoresearch_bootstraps_with_closed_region_allocator(tmp_path) -> None:
+    image_path = tmp_path / "input.png"
+    image = np.zeros((24, 24, 3), dtype=np.uint8)
+    image[4:20, 6:18] = (190, 220, 250)
+    Image.fromarray(image, mode="RGB").save(image_path)
+
+    summary = run_autoresearch(
+        image_path,
+        tmp_path / "closed_region_research",
+        iterations=1,
+        budget=8,
+        palette_size=2,
+        seed=7,
+        device="cpu",
+    )
+
+    assert summary["champion"] is not None
+    assert (
+        summary["champion"]["candidate"]["method"]
+        == "adaptive_closed_region_residual"
+    )
+    assert summary["persistent_frontier_diagnoses"] == []

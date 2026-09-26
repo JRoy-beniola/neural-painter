@@ -32,8 +32,8 @@ from painter.rich_refine import (
     refine_region_rich_primitives_scheduled,
 )
 from painter.sampling import sample_gradient_strokes
-from painter.structured import paint_structured_residual
 from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Stroke, TaperedStroke
+from painter.structured import paint_structured_residual
 
 DEFAULT_BUDGETS = (100, 250, 500, 1000, 2000)
 METHODS = ("static", "residual", "structured", "rich_residual", "region_rich_residual", "polygon_rich_residual", "polygon_rich_refined_contour", "mixed_rich_residual", "mixed_rich_refined_positional", "region_rich_refined", "region_rich_refined_structure", "region_rich_refined_schedule", "refined", "refined_structure", "global_refined", "global_refined_structure", "staged_refined", "staged_refined_structure")

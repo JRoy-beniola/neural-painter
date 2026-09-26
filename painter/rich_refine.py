@@ -15,11 +15,16 @@ from painter.refine import (
     _objective_loss,
     _resize_rgb,
     _resolve_device,
+    _target_edge_distance,
     _validate_refinement_args,
 )
 from painter.renderer import render_primitive_overlay, render_strokes
-from painter.rich import paint_polygon_rich_residual, paint_region_rich_residual
-from painter.stroke import EllipsePatch, PolygonPatch, Primitive, TaperedStroke
+from painter.rich import (
+    paint_mixed_rich_residual,
+    paint_polygon_rich_residual,
+    paint_region_rich_residual,
+)
+from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Primitive, TaperedStroke
 
 
 def _raster_segment_affine(
@@ -111,7 +116,9 @@ def refine_region_rich_primitives_ordered(
             raise ValueError("initial_background is required with initial_primitives")
         background = initial_background
     fixed_regions = [
-        primitive for primitive in primitives if isinstance(primitive, PolygonPatch)
+        primitive
+        for primitive in primitives
+        if isinstance(primitive, (PolygonPatch, BezierRibbon))
     ]
     patches = [primitive for primitive in primitives if isinstance(primitive, EllipsePatch)]
     tapered = [primitive for primitive in primitives if isinstance(primitive, TaperedStroke)]
@@ -122,6 +129,11 @@ def refine_region_rich_primitives_ordered(
 
     target_small = _resize_rgb(image_rgb, optimization_resolution)
     target = torch.tensor(target_small, dtype=dtype, device=torch_device)
+    target_edge_distance = (
+        _target_edge_distance(target)
+        if objective == "positional_contour"
+        else None
+    )
     height, width, _ = target_small.shape
     size = (width, height)
 
@@ -221,6 +233,7 @@ def refine_region_rich_primitives_ordered(
                 objective=objective,
                 ssim_weight=ssim_weight,
                 edge_weight=edge_weight,
+                target_edge_distance=target_edge_distance,
             )
             if optimize_geometry and geometry_drift_weight > 0.0:
                 centers, patch_rx, patch_ry, patch_angles = patch_geometry()
@@ -395,6 +408,7 @@ def refine_region_rich_primitives_ordered(
                 objective=objective,
                 ssim_weight=ssim_weight,
                 edge_weight=edge_weight,
+                target_edge_distance=target_edge_distance,
             )
             if optimize_geometry and geometry_drift_weight > 0.0:
                 drift = (
@@ -562,6 +576,45 @@ def refine_polygon_rich_primitives_ordered(
         optimization_resolution=optimization_resolution,
         device=device,
         objective=objective,
+        geometry_bound=geometry_bound,
+        optimize_geometry=True,
+        initial_primitives=primitives,
+        initial_background=background,
+    )
+
+
+
+def refine_mixed_rich_primitives_ordered(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    total_primitives: int,
+    *,
+    seed: int = 0,
+    steps: int = 40,
+    lr: float = 0.01,
+    max_refine_strokes: int = 256,
+    optimization_resolution: int = 96,
+    device: str = "auto",
+    geometry_bound: float = 0.02,
+) -> tuple[list[Primitive], tuple[int, int, int], RefinementStats]:
+    """Refine detail strokes over fixed polygon + Bezier-ribbon structure."""
+    primitives, background = paint_mixed_rich_residual(
+        image_rgb,
+        palette,
+        total_primitives,
+        seed=seed,
+    )
+    return refine_region_rich_primitives_ordered(
+        image_rgb,
+        palette,
+        total_primitives,
+        seed=seed,
+        steps=steps,
+        lr=lr,
+        max_refine_strokes=max_refine_strokes,
+        optimization_resolution=optimization_resolution,
+        device=device,
+        objective="positional_contour",
         geometry_bound=geometry_bound,
         optimize_geometry=True,
         initial_primitives=primitives,

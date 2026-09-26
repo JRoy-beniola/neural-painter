@@ -18,15 +18,20 @@ class OpenAICompatibleModel:
     api_key: str = ""
     timeout: int = 180
 
-    def complete(self, messages: list[dict[str, str]]) -> str:
+    def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        response_format: dict[str, Any] | None = None,
+    ) -> str:
         endpoint = self.base_url.rstrip("/") + "/chat/completions"
         payload = json.dumps(
             {
                 "model": self.model,
                 "messages": messages,
-                "temperature": 0.1,
+                "temperature": 0.0,
                 "stream": False,
-                "response_format": {"type": "json_object"},
+                "response_format": response_format or {"type": "json_object"},
                 "reasoning_effort": "none",
             }
         ).encode("utf-8")

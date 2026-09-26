@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from painter.agent.hypothesis import Finding, Hypothesis, Observation, ResearchQuestion
 from painter.agent.protocol import ExperimentProtocol
@@ -33,7 +34,7 @@ class ResearchMemory:
     def _read_list(path: Path) -> list[dict[str, Any]]:
         value = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, list):
-            raise ValueError(f"research state file must contain a list: {path}")
+            raise TypeError(f"research state file must contain a list: {path}")
         return value
 
     @staticmethod

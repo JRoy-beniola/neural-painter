@@ -10,7 +10,6 @@ from typing import Any
 from painter.agent.model import OpenAICompatibleModel, parse_json_action
 from painter.agent.tools import ProjectTools
 
-
 SYSTEM_PROMPT = """You are NeuralPainterAgent, a narrowly scoped research coding agent.
 
 Your entire world is the Neural Painter repository and one falsifiable mutation request.
@@ -91,7 +90,7 @@ class NeuralPainterAgent:
                 try:
                     action = parse_json_action(raw)
                     observation = self._execute(action)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     action = {"action": "invalid"}
                     observation = {
                         "ok": False,

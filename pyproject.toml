@@ -23,7 +23,7 @@ refine = [
 ]
 
 [tool.setuptools]
-packages = ["painter"]
+packages = ["painter", "painter.agent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

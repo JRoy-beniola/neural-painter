@@ -7,7 +7,14 @@ from collections.abc import Iterable
 
 from PIL import Image, ImageDraw
 
-from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Primitive, Stroke, TaperedStroke
+from painter.stroke import (
+    BezierRibbon,
+    EllipsePatch,
+    PolygonPatch,
+    Primitive,
+    Stroke,
+    TaperedStroke,
+)
 
 
 def _to_pixel(point: tuple[float, float], width: int, height: int) -> tuple[float, float]:

@@ -18,7 +18,11 @@ from painter.refine import (
     refine_residual_strokes_staged,
 )
 from painter.renderer import render_strokes
-from painter.rich import paint_polygon_rich_residual, paint_region_rich_residual, paint_rich_residual
+from painter.rich import (
+    paint_polygon_rich_residual,
+    paint_region_rich_residual,
+    paint_rich_residual,
+)
 from painter.rich_refine import (
     refine_polygon_rich_primitives_ordered,
     refine_region_rich_primitives_ordered,

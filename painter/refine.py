@@ -35,6 +35,9 @@ class RefinementStats:
     continuous_color: bool = True
     stages: int = 1
     sweeps: int = 1
+    accepted_by_raster: bool | None = None
+    raster_mse_before: float | None = None
+    raster_mse_after: float | None = None
 
 
 def _stroke_center(stroke: Stroke) -> tuple[float, float]:

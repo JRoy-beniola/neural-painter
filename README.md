@@ -438,3 +438,58 @@ python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
   --optimized-stroke-count 256 \
   --geometry-bound 0.02
 ```
+
+
+### Bezier ribbons + positional contour loss
+
+The mixed rich representation adds a fourth primitive family without imposing
+symmetry or object templates:
+
+- `PolygonPatch`: arbitrary broad connected regions,
+- `BezierRibbon`: cubic centerline + varying width for curved coherent bands,
+- `TaperedStroke`: fine local detail.
+
+`mixed_rich_residual` fits elongated connected residual components with
+Bezier ribbons first, fills remaining broad regions with polygons, then allocates
+the rest of the budget to tapered detail strokes.
+
+`mixed_rich_refined_positional` keeps the broad polygon/ribbon structure
+raster-exact and refines selected detail strokes with a positional contour
+objective:
+
+```text
+MSE
++ multi-scale SSIM
++ Sobel magnitude
++ edge orientation
++ Laplacian detail
++ target-edge distance penalty
++ weak excess-contour penalty
+```
+
+The positional term penalizes rendered contour energy according to its distance
+from target contours, so a fuzzy halo near the correct boundary is no longer
+treated as equivalent to an accurately placed edge.
+
+Run both 2000-primitive comparisons:
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round24/fleur_mixed_rich_residual_2000 \
+  --budgets 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --method mixed_rich_residual
+```
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round24/fleur_mixed_rich_positional_2000 \
+  --budgets 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --method mixed_rich_refined_positional \
+  --device cuda \
+  --optimized-stroke-count 256 \
+  --geometry-bound 0.02
+```

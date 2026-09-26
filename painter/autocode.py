@@ -12,7 +12,7 @@ import json
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -384,7 +384,7 @@ def autonomous_research(
                 primary_metric=draft.primary_metric,
                 expected_direction=draft.expected_direction,
                 min_effect_fraction=draft.min_effect_fraction,
-                locked_at=datetime.now(timezone.utc).isoformat(),
+                locked_at=datetime.now(UTC).isoformat(),
             )
             scientific_memory.lock_protocol(protocol)
             (cycle_dir / "protocol.json").write_text(

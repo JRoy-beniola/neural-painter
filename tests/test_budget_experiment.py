@@ -382,3 +382,46 @@ def test_rich_refinement_records_real_raster_acceptance(tmp_path) -> None:
     assert refinement["raster_mse_after"] is not None
     if not refinement["accepted_by_raster"]:
         assert report["runs"][0]["mse"] <= refinement["raster_mse_after"] + 1e-8
+
+
+
+def test_adaptive_closed_region_residual_writes_output(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "adaptive_closed"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=37,
+        budgets=[12],
+        method="adaptive_closed_region_residual",
+    )
+
+    run = report["runs"][0]
+    assert run["stroke_count"] == 12
+    assert "closed_bezier_region" in run["primitive_counts"]
+    assert sum(run["primitive_counts"].values()) == 12
+
+
+def test_adaptive_closed_region_refinement_records_checkpoints(tmp_path) -> None:
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "adaptive_closed_refined"
+    _write_input(input_path)
+
+    report = run_budget_experiment(
+        input_path,
+        output_dir,
+        palette_size=2,
+        seed=41,
+        budgets=[12],
+        method="adaptive_closed_region_refined",
+        optimized_stroke_count=3,
+        geometry_bound=0.01,
+    )
+
+    refinement = report["runs"][0]["refinement"]
+    assert refinement["objective"] == "contour_economy"
+    assert refinement["raster_checkpoints"] >= 1
+    assert refinement["best_raster_step"] is not None

@@ -115,7 +115,13 @@ class NeuralPainterAgent:
                 },
             ]
         )
-        return parse_experiment_draft(parse_json_object(raw))
+        draft = parse_experiment_draft(parse_json_object(raw))
+        expected_area = mutation.get("area", "").strip()
+        if expected_area and draft.intervention["area"] != expected_area:
+            raise ValueError(
+                "research planner may not broaden the controller-provided code area"
+            )
+        return draft
 
     def run(self, task: str, *, log_dir: Path) -> AgentResult:
         log_dir.mkdir(parents=True, exist_ok=True)

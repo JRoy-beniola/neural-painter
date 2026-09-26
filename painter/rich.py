@@ -11,7 +11,7 @@ from painter.background import estimate_border_background
 from painter.iterative import normalize_map
 from painter.renderer import render_strokes
 from painter.sampling import gradient_magnitude, sample_gradient_strokes
-from painter.stroke import EllipsePatch, PolygonPatch, Primitive, TaperedStroke
+from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Primitive, TaperedStroke
 
 
 def _nearest_color(pixel: np.ndarray, palette: np.ndarray) -> tuple[float, float, float]:
@@ -611,5 +611,255 @@ def paint_polygon_rich_residual(
             opacity=0.88,
         )
         primitives.extend(_to_tapered(base, seed=seed + 401))
+
+    return primitives, background
+
+
+
+def _ribbon_mask(
+    shape: tuple[int, int],
+    ribbon: BezierRibbon,
+) -> np.ndarray:
+    """Rasterize a ribbon mask through the canonical renderer."""
+    height, width = shape
+    image = render_strokes(
+        [ribbon],
+        size=(width, height),
+        background=(0, 0, 0),
+        samples_per_curve=48,
+    )
+    return np.asarray(image, dtype=np.uint8).max(axis=2) > 0
+
+
+def _fit_ribbon_to_component(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    labels: np.ndarray,
+    label: int,
+    *,
+    opacity: float,
+) -> BezierRibbon | None:
+    """Fit one cubic ribbon to an elongated connected residual component."""
+    ys, xs = np.nonzero(labels == label)
+    if len(xs) < 16:
+        return None
+
+    coords = np.column_stack((xs.astype(float), ys.astype(float)))
+    center = coords.mean(axis=0)
+    centered = coords - center
+    covariance = np.cov(centered, rowvar=False)
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    order = np.argsort(eigenvalues)[::-1]
+    major_value = float(max(eigenvalues[order[0]], 1e-8))
+    minor_value = float(max(eigenvalues[order[1]], 1e-8))
+    if major_value / minor_value < 2.0:
+        return None
+
+    major = eigenvectors[:, order[0]]
+    minor = eigenvectors[:, order[1]]
+    longitudinal = centered @ major
+    transverse = centered @ minor
+    lo, hi = np.quantile(longitudinal, [0.03, 0.97])
+    if hi - lo < 8.0:
+        return None
+
+    samples: list[np.ndarray] = []
+    widths: list[float] = []
+    positions = (0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0)
+    span = hi - lo
+    for fraction in positions:
+        anchor = lo + fraction * span
+        window = np.abs(longitudinal - anchor) <= max(2.0, 0.12 * span)
+        if np.count_nonzero(window) < 4:
+            point = center + anchor * major
+            half_width = 2.0 * math.sqrt(minor_value)
+        else:
+            local_long = float(np.median(longitudinal[window]))
+            local_trans = float(np.median(transverse[window]))
+            point = center + local_long * major + local_trans * minor
+            half_width = float(
+                np.quantile(np.abs(transverse[window] - local_trans), 0.85)
+            )
+        samples.append(point)
+        widths.append(max(1.5, 2.0 * half_width))
+
+    height, width, _ = image_rgb.shape
+
+    def normalize(point: np.ndarray) -> tuple[float, float]:
+        return (
+            float(np.clip(point[0] / max(width - 1, 1), 0.0, 1.0)),
+            float(np.clip(point[1] / max(height - 1, 1), 0.0, 1.0)),
+        )
+
+    representative = np.median(image_rgb[ys, xs], axis=0)
+    scale = max(min(width, height), 1)
+    width_start = float(np.clip(widths[0] / scale, 0.004, 0.18))
+    width_mid = float(np.clip(max(widths[1], widths[2]) / scale, 0.004, 0.22))
+    width_end = float(np.clip(widths[3] / scale, 0.004, 0.18))
+
+    return BezierRibbon(
+        p0=normalize(samples[0]),
+        p1=normalize(samples[1]),
+        p2=normalize(samples[2]),
+        p3=normalize(samples[3]),
+        width_start=width_start,
+        width_mid=width_mid,
+        width_end=width_end,
+        color=_nearest_color(representative, palette),
+        opacity=opacity,
+    )
+
+
+def _ribbon_improves_error(
+    current_rgb: np.ndarray,
+    target_rgb: np.ndarray,
+    ribbon: BezierRibbon,
+    *,
+    min_relative_improvement: float,
+) -> tuple[bool, np.ndarray]:
+    mask = _ribbon_mask(current_rgb.shape[:2], ribbon)
+    if not np.any(mask):
+        return False, current_rgb
+    before = float(np.mean((current_rgb[mask] - target_rgb[mask]) ** 2))
+    color = np.asarray(ribbon.color, dtype=np.float32)
+    candidate = current_rgb.copy()
+    alpha = float(ribbon.opacity)
+    candidate[mask] = (1.0 - alpha) * candidate[mask] + alpha * color
+    after = float(np.mean((candidate[mask] - target_rgb[mask]) ** 2))
+    return after < before * (1.0 - min_relative_improvement), candidate
+
+
+def _fit_residual_ribbons(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    *,
+    background: tuple[int, int, int],
+    max_ribbons: int,
+    opacity: float = 0.86,
+) -> list[BezierRibbon]:
+    """Fit ribbons to elongated connected residual masses."""
+    if max_ribbons <= 0:
+        return []
+
+    height, width, _ = image_rgb.shape
+    current_rgb = np.empty_like(image_rgb, dtype=np.float32)
+    current_rgb[...] = np.asarray(background, dtype=np.float32) / 255.0
+    ribbons: list[BezierRibbon] = []
+
+    for quantile in (0.90, 0.84, 0.76, 0.68, 0.58):
+        if len(ribbons) >= max_ribbons:
+            break
+        residual = normalize_map(np.linalg.norm(image_rgb - current_rgb, axis=2))
+        positive = residual[residual > 0.0]
+        if positive.size == 0:
+            break
+        threshold = float(np.quantile(positive, quantile))
+        binary = (residual >= threshold).astype(np.uint8)
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+        label_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+            binary,
+            connectivity=8,
+        )
+        candidates: list[tuple[float, int]] = []
+        minimum_area = max(16, round(height * width * 0.00004))
+        for label in range(1, label_count):
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            if area >= minimum_area:
+                candidates.append((float(residual[labels == label].sum()), label))
+        candidates.sort(reverse=True)
+
+        for _score, label in candidates:
+            if len(ribbons) >= max_ribbons:
+                break
+            ribbon = _fit_ribbon_to_component(
+                image_rgb,
+                palette,
+                labels,
+                label,
+                opacity=opacity,
+            )
+            if ribbon is None:
+                continue
+            accepted, candidate_rgb = _ribbon_improves_error(
+                current_rgb,
+                image_rgb,
+                ribbon,
+                min_relative_improvement=0.006,
+            )
+            if accepted:
+                ribbons.append(ribbon)
+                current_rgb = candidate_rgb
+
+    return ribbons
+
+
+def paint_mixed_rich_residual(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    total_primitives: int,
+    *,
+    seed: int = 0,
+    ribbon_fraction: float = 0.10,
+    polygon_fraction: float = 0.18,
+) -> tuple[list[Primitive], tuple[int, int, int]]:
+    """Use ribbons for elongated masses, polygons for regions, strokes for detail."""
+    if total_primitives < 1:
+        raise ValueError("total_primitives must be positive")
+    if ribbon_fraction < 0.0 or polygon_fraction < 0.0:
+        raise ValueError("primitive fractions must be non-negative")
+    if ribbon_fraction + polygon_fraction >= 1.0:
+        raise ValueError("ribbon_fraction + polygon_fraction must be less than 1")
+
+    height, width, _ = image_rgb.shape
+    background = estimate_border_background(image_rgb)
+    gradient = normalize_map(gradient_magnitude(image_rgb))
+    ribbon_budget = round(total_primitives * ribbon_fraction)
+    polygon_budget = round(total_primitives * polygon_fraction)
+
+    ribbons = _fit_residual_ribbons(
+        image_rgb,
+        palette,
+        background=background,
+        max_ribbons=ribbon_budget,
+    )
+    primitives: list[Primitive] = list(ribbons)
+
+    current = render_strokes(primitives, size=(width, height), background=background)
+    current_rgb = np.asarray(current, dtype=np.float32) / 255.0
+    residual_after_ribbons = normalize_map(np.linalg.norm(image_rgb - current_rgb, axis=2))
+
+    # Fit polygons to the remaining broad error rather than to the untouched target.
+    polygon_image = image_rgb.copy()
+    blend = residual_after_ribbons[..., None]
+    background_rgb = np.asarray(background, dtype=np.float32) / 255.0
+    polygon_image = blend * polygon_image + (1.0 - blend) * background_rgb
+    polygons = _fit_residual_polygons(
+        polygon_image,
+        palette,
+        background=background,
+        max_patches=polygon_budget,
+        gradient=gradient,
+    )
+    primitives.extend(polygons)
+
+    stroke_count = total_primitives - len(primitives)
+    if stroke_count > 0:
+        current = render_strokes(primitives, size=(width, height), background=background)
+        current_rgb = np.asarray(current, dtype=np.float32) / 255.0
+        residual = normalize_map(np.linalg.norm(image_rgb - current_rgb, axis=2))
+        weight_map = 0.76 * residual + 0.24 * gradient
+        base = sample_gradient_strokes(
+            image_rgb,
+            palette,
+            stroke_count,
+            seed=seed + 503,
+            weight_map=weight_map,
+            min_length=0.006,
+            max_length=0.065,
+            width=0.009,
+            opacity=0.86,
+        )
+        primitives.extend(_to_tapered(base, seed=seed + 607))
 
     return primitives, background

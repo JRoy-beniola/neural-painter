@@ -369,3 +369,87 @@ def test_search_code_can_scope_and_fuzz_phrase(tmp_path: Path) -> None:
     assert "fuzzy token matches:" in result
     assert "painter/rich.py:1:def adaptive_primitive_fractions():" in result
     assert "painter/other.py" not in result
+
+
+def test_native_coding_accepts_content_finish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {
+                                "action": "finish",
+                                "summary": "allocator located",
+                            }
+                        ),
+                        "tool_calls": [],
+                    }
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request: Request, timeout: int) -> _Response:
+        del request, timeout
+        return _Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    model = OpenAICompatibleModel("http://localhost:11434/v1", "test-model")
+    result = model.complete(
+        [{"role": "user", "content": "Locate it and finish."}],
+        response_format=CODING_ACTION_RESPONSE_FORMAT,
+    )
+
+    assert json.loads(result) == {
+        "action": "finish",
+        "summary": "allocator located",
+    }
+
+
+def test_native_coding_rejects_content_nonfinish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {
+                                "action": "search_code",
+                                "query": "adaptive",
+                            }
+                        ),
+                        "tool_calls": [],
+                    }
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request: Request, timeout: int) -> _Response:
+        del request, timeout
+        return _Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    model = OpenAICompatibleModel("http://localhost:11434/v1", "test-model")
+    with pytest.raises(RuntimeError, match="no coding tool call"):
+        model.complete(
+            [{"role": "user", "content": "Keep working."}],
+            response_format=CODING_ACTION_RESPONSE_FORMAT,
+        )

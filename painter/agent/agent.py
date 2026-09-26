@@ -11,6 +11,50 @@ from painter.agent.model import OpenAICompatibleModel, parse_json_action, parse_
 from painter.agent.protocol import ExperimentDraft, parse_experiment_draft
 from painter.agent.tools import ProjectTools
 
+CODING_ACTION_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "coding_action",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "read_file",
+                        "search_code",
+                        "apply_patch",
+                        "run_ruff",
+                        "run_tests",
+                        "git_diff",
+                        "finish",
+                    ],
+                },
+                "path": {"type": ["string", "null"]},
+                "start_line": {"type": ["integer", "null"], "minimum": 1},
+                "end_line": {"type": ["integer", "null"], "minimum": 1},
+                "query": {"type": ["string", "null"]},
+                "patch": {"type": ["string", "null"]},
+                "target": {"type": ["string", "null"]},
+                "summary": {"type": ["string", "null"]},
+            },
+            "required": [
+                "action",
+                "path",
+                "start_line",
+                "end_line",
+                "query",
+                "patch",
+                "target",
+                "summary",
+            ],
+        },
+    },
+}
+
+
 EXPERIMENT_RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {
@@ -224,7 +268,10 @@ class NeuralPainterAgent:
 
         with transcript_path.open("w", encoding="utf-8") as transcript:
             for turn in range(1, self.max_turns + 1):
-                raw = self.model.complete(messages)
+                raw = self.model.complete(
+                    messages,
+                    response_format=CODING_ACTION_RESPONSE_FORMAT,
+                )
                 transcript.write(
                     json.dumps({"turn": turn, "kind": "model", "content": raw}) + "\n"
                 )
@@ -251,9 +298,9 @@ class NeuralPainterAgent:
                             ),
                         }
                     else:
-                        observation = self._execute(action)
-                        if observation.get("ok") and inspection_key is not None:
+                        if inspection_key is not None:
                             inspection_keys.add(inspection_key)
+                        observation = self._execute(action)
                         if observation.get("ok") and name == "apply_patch":
                             source_changed = True
                             inspection_keys.clear()

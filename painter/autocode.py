@@ -17,6 +17,7 @@ from typing import Any
 
 from painter.agent import NeuralPainterAgent, OpenAICompatibleModel
 
+
 @dataclass(frozen=True, slots=True)
 class AcceptanceDecision:
     accepted: bool

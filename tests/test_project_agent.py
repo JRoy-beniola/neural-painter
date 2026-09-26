@@ -107,3 +107,30 @@ def test_openai_compatible_model_requests_json_mode(monkeypatch: pytest.MonkeyPa
 
     assert result == '{"action":"finish"}'
     assert captured["response_format"] == {"type": "json_object"}
+    assert captured["reasoning_effort"] == "none"
+
+
+def test_openai_compatible_model_rejects_empty_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {"choices": [{"message": {"content": ""}}]}
+            ).encode("utf-8")
+
+    def fake_urlopen(request: Request, timeout: int) -> _Response:
+        del request, timeout
+        return _Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    model = OpenAICompatibleModel("http://localhost:11434/v1", "test-model")
+    with pytest.raises(RuntimeError, match="empty assistant content"):
+        model.complete([{"role": "user", "content": "Return JSON."}])

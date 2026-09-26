@@ -9,6 +9,7 @@ from time import perf_counter
 import numpy as np
 from PIL import Image
 
+from painter.diagnostics import image_diagnostics
 from painter.iterative import paint_residual
 from painter.metrics import reconstruction_metrics
 from painter.palette import extract_palette
@@ -32,6 +33,7 @@ from painter.rich_refine import (
 )
 from painter.sampling import sample_gradient_strokes
 from painter.structured import paint_structured_residual
+from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Stroke, TaperedStroke
 
 DEFAULT_BUDGETS = (100, 250, 500, 1000, 2000)
 METHODS = ("static", "residual", "structured", "rich_residual", "region_rich_residual", "polygon_rich_residual", "polygon_rich_refined_contour", "mixed_rich_residual", "mixed_rich_refined_positional", "region_rich_refined", "region_rich_refined_structure", "region_rich_refined_schedule", "refined", "refined_structure", "global_refined", "global_refined_structure", "staged_refined", "staged_refined_structure")
@@ -266,12 +268,26 @@ def run_budget_experiment(
         painted_rgb = np.asarray(painted, dtype=np.float32) / 255.0
 
         metrics = reconstruction_metrics(target_rgb, painted_rgb)
-        run: dict[str, float | int | str | list[int] | dict[str, float | int]] = {
+        diagnostics = image_diagnostics(
+            target_rgb,
+            painted_rgb,
+            background_rgb=background,
+        )
+        primitive_counts = {
+            "stroke": sum(isinstance(item, Stroke) for item in strokes),
+            "tapered_stroke": sum(isinstance(item, TaperedStroke) for item in strokes),
+            "ellipse_patch": sum(isinstance(item, EllipsePatch) for item in strokes),
+            "polygon_patch": sum(isinstance(item, PolygonPatch) for item in strokes),
+            "bezier_ribbon": sum(isinstance(item, BezierRibbon) for item in strokes),
+        }
+        run: dict[str, object] = {
             "stroke_count": budget,
             "render_ms": elapsed_ms,
             "output": painted_path.name,
             "background_rgb": list(background),
             **metrics,
+            "diagnostics": diagnostics,
+            "primitive_counts": primitive_counts,
         }
         if refinement is not None:
             run["refinement"] = {

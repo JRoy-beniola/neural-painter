@@ -54,8 +54,8 @@ class OpenAICompatibleModel:
             ) from exc
 
 
-def parse_json_action(text: str) -> dict[str, Any]:
-    """Parse a single JSON action, tolerating fenced JSON output."""
+def parse_json_object(text: str) -> dict[str, Any]:
+    """Parse one JSON object, tolerating fenced model output."""
     stripped = text.strip()
     if stripped.startswith(("~~~", "```")):
         lines = stripped.splitlines()
@@ -75,7 +75,13 @@ def parse_json_action(text: str) -> dict[str, Any]:
         value = json.loads(stripped[start : end + 1])
 
     if not isinstance(value, dict):
-        raise TypeError("model action must be a JSON object")
+        raise TypeError("model output must be a JSON object")
+    return value
+
+
+def parse_json_action(text: str) -> dict[str, Any]:
+    """Parse a single tool action from model output."""
+    value = parse_json_object(text)
     if not isinstance(value.get("action"), str):
         raise TypeError("model action must contain a string 'action'")
     return value

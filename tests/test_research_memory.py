@@ -16,8 +16,18 @@ class _FakeModel:
     def __init__(self, payload: dict) -> None:
         self.payload = payload
 
-    def complete(self, messages: list[dict[str, str]]) -> str:
+    def complete(
+        self,
+        messages: list[dict[str, str]],
+        **kwargs: object,
+    ) -> str:
         assert messages
+        response_format = kwargs.get("response_format")
+        assert isinstance(response_format, dict)
+        metric_schema = response_format["json_schema"]["schema"]["properties"][
+            "primary_metric"
+        ]
+        assert "high_frequency_exterior_ratio" not in metric_schema["enum"]
         return json.dumps(self.payload)
 
 

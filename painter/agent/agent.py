@@ -45,7 +45,6 @@ EXPERIMENT_RESPONSE_FORMAT = {
                         "ssim",
                         "boundary_f1",
                         "boundary_distance",
-                        "high_frequency_ratio",
                         "runtime_ms",
                     ],
                 },
@@ -86,7 +85,7 @@ Return one JSON object and nothing else with this schema:
   "falsifier": "what result would count against the claim",
   "intervention": {"area": "repo/path.py", "change": "one bounded change"},
   "controls": ["what must stay fixed"],
-  "primary_metric": "mse|ssim|boundary_f1|boundary_distance|high_frequency_ratio|runtime_ms",
+  "primary_metric": "mse|ssim|boundary_f1|boundary_distance|runtime_ms",
   "expected_direction": "lower|higher",
   "min_effect_fraction": 0.001
 }

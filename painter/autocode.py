@@ -12,10 +12,13 @@ import json
 import subprocess
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from painter.agent import NeuralPainterAgent, OpenAICompatibleModel
+from painter.agent.memory import ResearchMemory
+from painter.agent.protocol import ExperimentProtocol, evaluate_prediction
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +155,15 @@ def _champion_metrics(summary: dict[str, Any]) -> dict[str, float]:
         ),
         "high_frequency_ratio": float(
             diagnostics.get("high_frequency_ratio", float("inf"))
+        ),
+        "high_frequency_boundary_ratio": float(
+            diagnostics.get("high_frequency_boundary_ratio", float("inf"))
+        ),
+        "high_frequency_interior_ratio": float(
+            diagnostics.get("high_frequency_interior_ratio", float("inf"))
+        ),
+        "high_frequency_exterior_ratio": float(
+            diagnostics.get("high_frequency_exterior_ratio", float("inf"))
         ),
         "runtime_ms": float(run.get("render_ms", float("inf"))),
     }
@@ -297,6 +309,7 @@ def autonomous_research(
 
     history: list[dict[str, Any]] = []
     memory_path = output_root / "research_memory.jsonl"
+    scientific_memory = ResearchMemory(output_root / "scientific_state")
 
     def remember(entry: dict[str, Any]) -> None:
         history.append(entry)
@@ -326,13 +339,7 @@ def autonomous_research(
 
             mutation = mutations[0]
             cycle_dir = output_root / f"mutation_{cycle:02d}"
-            prompt = build_agent_prompt(
-                mutation,
-                baseline_summary=baseline,
-                research_history=history,
-            )
-            (cycle_dir / "prompt.txt").parent.mkdir(parents=True, exist_ok=True)
-            (cycle_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+            cycle_dir.mkdir(parents=True, exist_ok=True)
 
             model = OpenAICompatibleModel(
                 base_url=model_base_url,
@@ -345,6 +352,74 @@ def autonomous_research(
                 worktree,
                 max_turns=agent_turns,
             )
+
+            try:
+                draft = agent.propose_experiment(
+                    mutation,
+                    baseline_summary=baseline,
+                    research_state=scientific_memory.snapshot(),
+                )
+            except Exception as exc:  # noqa: BLE001
+                remember(
+                    {
+                        "cycle": cycle,
+                        "status": "rejected",
+                        "reason": (
+                            "research planner failed: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                        "mutation": mutation,
+                    }
+                )
+                continue
+
+            question = scientific_memory.create_question(draft.question)
+            hypothesis = scientific_memory.create_hypothesis(
+                question_id=question.id,
+                claim=draft.hypothesis,
+                prediction=draft.prediction,
+                falsifier=draft.falsifier,
+            )
+            protocol = ExperimentProtocol(
+                id=scientific_memory.next_experiment_id(),
+                question_id=question.id,
+                hypothesis_id=hypothesis.id,
+                question=draft.question,
+                hypothesis=draft.hypothesis,
+                prediction=draft.prediction,
+                falsifier=draft.falsifier,
+                intervention=draft.intervention,
+                controls=draft.controls,
+                primary_metric=draft.primary_metric,
+                expected_direction=draft.expected_direction,
+                min_effect_fraction=draft.min_effect_fraction,
+                target_value=draft.target_value,
+                locked_at=datetime.now(UTC).isoformat(),
+            )
+            scientific_memory.lock_protocol(protocol)
+            (cycle_dir / "protocol.json").write_text(
+                json.dumps(protocol.to_dict(), indent=2),
+                encoding="utf-8",
+            )
+
+            planned_mutation = {
+                "area": protocol.intervention["area"],
+                "hypothesis": protocol.hypothesis,
+                "change": protocol.intervention["change"],
+            }
+            prompt = build_agent_prompt(
+                planned_mutation,
+                baseline_summary=baseline,
+                research_history=history,
+            )
+            prompt += (
+                "\n\nLOCKED EXPERIMENT PROTOCOL:\n"
+                + json.dumps(protocol.to_dict(), indent=2)
+                + "\n\nDo not change the hypothesis, primary metric, controls, or "
+                "decision threshold while implementing it.\n"
+            )
+            (cycle_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+
             try:
                 agent_result = agent.run(prompt, log_dir=cycle_dir)
             except Exception as exc:  # noqa: BLE001
@@ -355,8 +430,14 @@ def autonomous_research(
                         "cycle": cycle,
                         "status": "rejected",
                         "reason": f"coding agent failed: {type(exc).__name__}: {exc}",
-                        "mutation": mutation,
+                        "mutation": planned_mutation,
+                        "experiment_id": protocol.id,
                     }
+                )
+                scientific_memory.record_inconclusive(
+                    hypothesis_id=hypothesis.id,
+                    experiment_id=protocol.id,
+                    reason=f"coding agent failed: {type(exc).__name__}: {exc}",
                 )
                 continue
 
@@ -368,9 +449,15 @@ def autonomous_research(
                         "cycle": cycle,
                         "status": "rejected",
                         "reason": agent_result.summary,
-                        "mutation": mutation,
+                        "mutation": planned_mutation,
+                        "experiment_id": protocol.id,
                         "agent_turns": agent_result.turns,
                     }
+                )
+                scientific_memory.record_inconclusive(
+                    hypothesis_id=hypothesis.id,
+                    experiment_id=protocol.id,
+                    reason=agent_result.summary,
                 )
                 continue
 
@@ -381,8 +468,14 @@ def autonomous_research(
                         "cycle": cycle,
                         "status": "rejected",
                         "reason": "coding agent produced no source changes",
-                        "mutation": mutation,
+                        "mutation": planned_mutation,
+                        "experiment_id": protocol.id,
                     }
+                )
+                scientific_memory.record_inconclusive(
+                    hypothesis_id=hypothesis.id,
+                    experiment_id=protocol.id,
+                    reason="coding agent produced no source changes",
                 )
                 continue
 
@@ -402,8 +495,14 @@ def autonomous_research(
                         "cycle": cycle,
                         "status": "rejected",
                         "reason": f"quality gate failed: {gate_report['gate']}",
-                        "mutation": mutation,
+                        "mutation": planned_mutation,
+                        "experiment_id": protocol.id,
                     }
+                )
+                scientific_memory.record_inconclusive(
+                    hypothesis_id=hypothesis.id,
+                    experiment_id=protocol.id,
+                    reason=f"quality gate failed: {gate_report['gate']}",
                 )
                 continue
 
@@ -420,10 +519,36 @@ def autonomous_research(
                 timeout=experiment_timeout,
             )
             decision = decide_acceptance(baseline, candidate)
+            before_metrics = _champion_metrics(baseline)
+            after_metrics = _champion_metrics(candidate)
+            relation = evaluate_prediction(protocol, before_metrics, after_metrics)
+            observation = scientific_memory.record_observation(
+                experiment_id=protocol.id,
+                hypothesis_id=hypothesis.id,
+                before=before_metrics,
+                after=after_metrics,
+                relation=relation,
+                accepted=decision.accepted,
+                reasons=decision.reasons,
+            )
+            scientific_memory.record_finding(
+                hypothesis_id=hypothesis.id,
+                observation_id=observation.id,
+                relation=relation,
+                statement=(
+                    f"{protocol.primary_metric} moved from "
+                    f"{before_metrics[protocol.primary_metric]:.6g} to "
+                    f"{after_metrics[protocol.primary_metric]:.6g}; "
+                    f"pre-registered prediction {relation}."
+                ),
+            )
             comparison = {
-                "baseline": _champion_metrics(baseline),
-                "candidate": _champion_metrics(candidate),
+                "baseline": before_metrics,
+                "candidate": after_metrics,
                 "accepted": decision.accepted,
+                "prediction_relation": relation,
+                "experiment_id": protocol.id,
+                "hypothesis_id": hypothesis.id,
                 "reasons": list(decision.reasons),
             }
             (cycle_dir / "comparison.json").write_text(
@@ -444,7 +569,7 @@ def autonomous_research(
                     {
                         "cycle": cycle,
                         "status": "accepted",
-                        "mutation": mutation,
+                        "mutation": planned_mutation,
                         "comparison": comparison,
                         "agent_summary": agent_result.summary,
                         "agent_turns": agent_result.turns,
@@ -457,7 +582,7 @@ def autonomous_research(
                     {
                         "cycle": cycle,
                         "status": "rejected",
-                        "mutation": mutation,
+                        "mutation": planned_mutation,
                         "comparison": comparison,
                         "agent_summary": agent_result.summary,
                         "agent_turns": agent_result.turns,

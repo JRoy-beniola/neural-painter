@@ -9,6 +9,7 @@ from pathlib import Path
 
 ALLOWED_PREFIXES = ("painter/", "scripts/", "tests/")
 ALLOWED_ROOT_FILES = {"README.md", "pyproject.toml"}
+PROTECTED_PREFIXES = ("painter/agent/",)
 PROTECTED_PATHS = {
     "painter/metrics.py",
     "painter/renderer.py",
@@ -67,29 +68,83 @@ class ProjectTools:
             f"{index + 1}: {line}"
             for index, line in enumerate(lines[start:stop], start=start)
         )
-        return selected[:MAX_READ_CHARS]
-
-    def search_code(self, query: str) -> str:
-        if not query.strip():
-            raise ValueError("search query must be non-empty")
-        return self._run(
-            [
-                "rg",
-                "-n",
-                "--glob",
-                "*.py",
-                "--glob",
-                "README.md",
-                "--glob",
-                "pyproject.toml",
-                query,
-                "painter",
-                "scripts",
-                "tests",
-                "README.md",
-                "pyproject.toml",
-            ]
+        header = (
+            f"[{relative.as_posix()} lines {start + 1}-{stop} of {len(lines)}"
+            + ("; more lines available" if stop < len(lines) else "; EOF")
+            + "]\n"
         )
+        return (header + selected)[:MAX_READ_CHARS]
+
+    def search_code(self, query: str, path: str | None = None) -> str:
+        needle = query.strip()
+        if not needle:
+            raise ValueError("search query must be non-empty")
+
+        candidates: list[Path] = []
+        if path:
+            relative = self._safe_relative(path)
+            source = self.root / relative
+            if source.is_file():
+                candidates = [source]
+            elif source.is_dir():
+                candidates = sorted(source.rglob("*.py"))
+            else:
+                raise FileNotFoundError(path)
+        else:
+            for directory in ("painter", "scripts", "tests"):
+                root = self.root / directory
+                if root.is_dir():
+                    candidates.extend(sorted(root.rglob("*.py")))
+            for name in ("README.md", "pyproject.toml"):
+                root_file = self.root / name
+                if root_file.is_file():
+                    candidates.append(root_file)
+
+        def collect_literal() -> list[str]:
+            found: list[str] = []
+            lowered = needle.lower()
+            for source in candidates:
+                relative = source.relative_to(self.root).as_posix()
+                for line_number, line in enumerate(
+                    source.read_text(encoding="utf-8").splitlines(),
+                    start=1,
+                ):
+                    if lowered in line.lower():
+                        found.append(f"{relative}:{line_number}:{line}")
+                        if sum(len(item) + 1 for item in found) >= MAX_TOOL_OUTPUT:
+                            return found
+            return found
+
+        matches = collect_literal()
+        if matches:
+            return "\n".join(matches)[:MAX_TOOL_OUTPUT]
+
+        tokens = [
+            token.lower()
+            for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", needle)
+            if len(token) >= 3
+        ]
+        fallback: list[tuple[int, str]] = []
+        for source in candidates:
+            relative = source.relative_to(self.root).as_posix()
+            for line_number, line in enumerate(
+                source.read_text(encoding="utf-8").splitlines(),
+                start=1,
+            ):
+                lowered = line.lower()
+                score = sum(token in lowered for token in tokens)
+                if score:
+                    fallback.append(
+                        (score, f"{relative}:{line_number}:{line}")
+                    )
+
+        if not fallback:
+            scope = f" in {path}" if path else ""
+            return f"no matches for query: {needle}{scope}"
+
+        fallback.sort(key=lambda item: (-item[0], item[1]))
+        rendered = ["fuzzy token matches:"] + [item for _, item in fallback[:80]]
+        return "\n".join(rendered)[:MAX_TOOL_OUTPUT]
 
     def git_diff(self) -> str:
         return self._run(
@@ -126,7 +181,7 @@ class ProjectTools:
         for path in touched:
             relative = self._safe_relative(path)
             posix = relative.as_posix()
-            if posix in PROTECTED_PATHS:
+            if posix in PROTECTED_PATHS or posix.startswith(PROTECTED_PREFIXES):
                 raise ValueError(f"agent is not allowed to modify protected file: {posix}")
 
         result = subprocess.run(

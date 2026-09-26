@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-Direction = Literal["lower", "higher"]
+Direction = Literal["lower", "higher", "toward_target"]
 Relation = Literal["supports", "weakens", "inconclusive"]
 
 ALLOWED_PRIMARY_METRICS = frozenset(
@@ -14,6 +14,10 @@ ALLOWED_PRIMARY_METRICS = frozenset(
         "ssim",
         "boundary_f1",
         "boundary_distance",
+        "high_frequency_ratio",
+        "high_frequency_boundary_ratio",
+        "high_frequency_interior_ratio",
+        "high_frequency_exterior_ratio",
         "runtime_ms",
     }
 )
@@ -32,6 +36,7 @@ class ExperimentDraft:
     primary_metric: str
     expected_direction: Direction
     min_effect_fraction: float = 0.001
+    target_value: float | None = None
 
     def validate(self) -> None:
         required = {
@@ -45,8 +50,14 @@ class ExperimentDraft:
                 raise ValueError(f"{name} must be non-empty")
         if self.primary_metric not in ALLOWED_PRIMARY_METRICS:
             raise ValueError(f"unsupported primary metric: {self.primary_metric}")
-        if self.expected_direction not in {"lower", "higher"}:
-            raise ValueError("expected_direction must be 'lower' or 'higher'")
+        if self.expected_direction not in {"lower", "higher", "toward_target"}:
+            raise ValueError(
+                "expected_direction must be 'lower', 'higher', or 'toward_target'"
+            )
+        if self.expected_direction == "toward_target" and self.target_value is None:
+            raise ValueError("target_value is required for toward_target objectives")
+        if self.expected_direction != "toward_target" and self.target_value is not None:
+            raise ValueError("target_value is only valid for toward_target objectives")
         if not 0.0 <= self.min_effect_fraction <= 1.0:
             raise ValueError("min_effect_fraction must be between 0 and 1")
         if not self.intervention.get("area", "").strip():
@@ -73,6 +84,7 @@ class ExperimentProtocol:
     primary_metric: str
     expected_direction: Direction
     min_effect_fraction: float
+    target_value: float | None
     locked_at: str
 
     def validate(self) -> None:
@@ -86,6 +98,7 @@ class ExperimentProtocol:
             primary_metric=self.primary_metric,
             expected_direction=self.expected_direction,
             min_effect_fraction=self.min_effect_fraction,
+            target_value=self.target_value,
         ).validate()
         if not self.id.strip() or not self.question_id.strip() or not self.hypothesis_id.strip():
             raise ValueError("protocol IDs must be non-empty")
@@ -118,6 +131,11 @@ def parse_experiment_draft(payload: dict[str, Any]) -> ExperimentDraft:
         primary_metric=str(payload.get("primary_metric", "")),
         expected_direction=str(payload.get("expected_direction", "")),  # type: ignore[arg-type]
         min_effect_fraction=float(payload.get("min_effect_fraction", 0.001)),
+        target_value=(
+            None
+            if payload.get("target_value") is None
+            else float(payload["target_value"])
+        ),
     )
     draft.validate()
     return draft
@@ -139,6 +157,18 @@ def evaluate_prediction(
     scale = max(abs(old), 1e-12)
     fractional_change = (new - old) / scale
     epsilon = protocol.min_effect_fraction
+
+    if protocol.expected_direction == "toward_target":
+        assert protocol.target_value is not None
+        old_distance = abs(old - protocol.target_value)
+        new_distance = abs(new - protocol.target_value)
+        scale = max(old_distance, 1e-12)
+        distance_change = (new_distance - old_distance) / scale
+        if distance_change <= -epsilon:
+            return "supports"
+        if distance_change >= epsilon:
+            return "weakens"
+        return "inconclusive"
 
     if protocol.expected_direction == "lower":
         if fractional_change <= -epsilon:

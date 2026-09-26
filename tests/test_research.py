@@ -12,6 +12,7 @@ from painter.research import (
     Diagnosis,
     ExperimentCandidate,
     champion_record,
+    champion_records,
     diagnose_run,
     frontier_diagnoses,
     mutation_plan,
@@ -42,6 +43,11 @@ def test_diagnose_run_detects_clutter_and_structure_failure() -> None:
             "mean_boundary_distance_px": 6.0,
             "edge_energy_ratio": 2.0,
             "high_frequency_ratio": 2.5,
+            "high_frequency_boundary_ratio": 2.6,
+            "high_frequency_interior_ratio": 1.4,
+            "high_frequency_exterior_ratio": 1.2,
+            "residual_pixel_fraction": 0.10,
+            "largest_residual_component_energy_share": 0.45,
             "largest_residual_component_fraction": 0.12,
         },
     }
@@ -287,3 +293,79 @@ def test_autoresearch_bootstraps_with_closed_region_allocator(tmp_path) -> None:
         == "adaptive_closed_region_residual"
     )
     assert summary["persistent_frontier_diagnoses"] == []
+
+
+
+def test_mutation_plan_does_not_recommend_existing_capability() -> None:
+    plan = mutation_plan(
+        [
+            Diagnosis(
+                code="clutter",
+                severity=0.7,
+                evidence="test",
+                recommendation="test",
+            ),
+            Diagnosis(
+                code="boundary_placement",
+                severity=0.6,
+                evidence="test",
+                recommendation="test",
+            ),
+        ]
+    )
+
+    changes = " ".join(item["change"] for item in plan)
+    assert "add a contour-economy regularizer" not in changes
+    assert "add closed smooth spline regions" not in changes
+    assert "region-aware" in changes
+    assert "control points" in changes
+
+
+def test_category_champions_keep_distinct_objectives() -> None:
+    records = [
+        {
+            "iteration": 0,
+            "candidate": {"method": "fast"},
+            "report": {
+                "runs": [
+                    {
+                        "mse": 0.02,
+                        "ssim": 0.82,
+                        "render_ms": 5.0,
+                        "diagnostics": {
+                            "boundary_f1": 0.80,
+                            "mean_boundary_distance_px": 2.0,
+                            "high_frequency_ratio": 1.3,
+                            "edge_energy_ratio": 1.1,
+                        },
+                    }
+                ]
+            },
+        },
+        {
+            "iteration": 1,
+            "candidate": {"method": "accurate"},
+            "report": {
+                "runs": [
+                    {
+                        "mse": 0.01,
+                        "ssim": 0.86,
+                        "render_ms": 20.0,
+                        "diagnostics": {
+                            "boundary_f1": 0.60,
+                            "mean_boundary_distance_px": 3.0,
+                            "high_frequency_ratio": 1.05,
+                            "edge_energy_ratio": 1.0,
+                        },
+                    }
+                ]
+            },
+        },
+    ]
+
+    champions = champion_records(records)
+
+    assert champions["reconstruction"]["iteration"] == 1
+    assert champions["boundary"]["iteration"] == 0
+    assert champions["clutter"]["iteration"] == 1
+    assert champions["runtime"]["iteration"] == 0

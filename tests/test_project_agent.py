@@ -10,6 +10,7 @@ from urllib.request import Request
 import pytest
 
 from painter.agent.agent import CODING_ACTION_RESPONSE_FORMAT, NeuralPainterAgent
+from painter.agent.agent import CODING_ACTION_RESPONSE_FORMAT
 from painter.agent.model import OpenAICompatibleModel, parse_json_action
 from painter.agent.tools import ProjectTools
 
@@ -230,3 +231,62 @@ def test_agent_requests_coding_action_schema(tmp_path: Path) -> None:
     assert model.response_format == CODING_ACTION_RESPONSE_FORMAT
     action_schema = CODING_ACTION_RESPONSE_FORMAT["json_schema"]["schema"]
     assert "action" in action_schema["required"]
+
+
+def test_openai_compatible_model_uses_native_tool_calls_for_coding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": [
+                                    {
+                                        "type": "function",
+                                        "function": {
+                                            "name": "search_code",
+                                            "arguments": {"query": "adaptive_allocator"},
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request: Request, timeout: int) -> _Response:
+        del timeout
+        data = request.data
+        assert data is not None
+        captured.update(json.loads(data.decode("utf-8")))
+        return _Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    model = OpenAICompatibleModel("http://localhost:11434/v1", "test-model")
+    result = model.complete(
+        [{"role": "user", "content": "Find the allocator."}],
+        response_format=CODING_ACTION_RESPONSE_FORMAT,
+    )
+
+    assert json.loads(result) == {
+        "action": "search_code",
+        "query": "adaptive_allocator",
+    }
+    assert "tools" in captured
+    assert captured["tool_choice"] == "required"
+    assert "response_format" not in captured

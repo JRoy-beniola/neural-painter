@@ -11,7 +11,14 @@ from painter.background import estimate_border_background
 from painter.iterative import normalize_map
 from painter.renderer import render_strokes
 from painter.sampling import gradient_magnitude, sample_gradient_strokes
-from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Primitive, TaperedStroke
+from painter.stroke import (
+    BezierRibbon,
+    ClosedBezierRegion,
+    EllipsePatch,
+    PolygonPatch,
+    Primitive,
+    TaperedStroke,
+)
 
 
 def _nearest_color(pixel: np.ndarray, palette: np.ndarray) -> tuple[float, float, float]:
@@ -945,4 +952,309 @@ def paint_adaptive_rich_residual(
         seed=seed,
         ribbon_fraction=ribbon_fraction,
         polygon_fraction=polygon_fraction,
+    )
+
+
+
+def _normalize_point_xy(
+    point: np.ndarray,
+    *,
+    width: int,
+    height: int,
+) -> tuple[float, float]:
+    return (
+        float(np.clip(point[0] / max(width - 1, 1), 0.0, 1.0)),
+        float(np.clip(point[1] / max(height - 1, 1), 0.0, 1.0)),
+    )
+
+
+def _catmull_rom_closed_segments(
+    vertices: np.ndarray,
+    *,
+    width: int,
+    height: int,
+    tension: float = 1.0,
+) -> tuple[tuple[tuple[float, float], ...], ...]:
+    """Convert a closed polygon into C1-smooth cubic Bezier segments."""
+    count = len(vertices)
+    segments = []
+    for index in range(count):
+        p_prev = vertices[(index - 1) % count]
+        p0 = vertices[index]
+        p3 = vertices[(index + 1) % count]
+        p_next = vertices[(index + 2) % count]
+
+        p1 = p0 + tension * (p3 - p_prev) / 6.0
+        p2 = p3 - tension * (p_next - p0) / 6.0
+
+        segment = (
+            _normalize_point_xy(p0, width=width, height=height),
+            _normalize_point_xy(p1, width=width, height=height),
+            _normalize_point_xy(p2, width=width, height=height),
+            _normalize_point_xy(p3, width=width, height=height),
+        )
+        segments.append(segment)
+    return tuple(segments)
+
+
+def _fit_closed_bezier_region_to_component(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    labels: np.ndarray,
+    label: int,
+    *,
+    opacity: float,
+    max_vertices: int = 10,
+) -> ClosedBezierRegion | None:
+    """Fit a smooth closed Bezier region to one connected residual component."""
+    component = (labels == label).astype(np.uint8)
+    contours, _ = cv2.findContours(
+        component,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_NONE,
+    )
+    if not contours:
+        return None
+
+    contour = max(contours, key=cv2.contourArea)
+    area = float(cv2.contourArea(contour))
+    if area < 16.0:
+        return None
+
+    perimeter = max(cv2.arcLength(contour, True), 1.0)
+    epsilon = 0.01 * perimeter
+    approximation = cv2.approxPolyDP(contour, epsilon, True).reshape(-1, 2).astype(float)
+    while len(approximation) > max_vertices:
+        epsilon *= 1.3
+        approximation = cv2.approxPolyDP(contour, epsilon, True).reshape(-1, 2).astype(float)
+
+    if len(approximation) < 4:
+        return None
+
+    height, width, _ = image_rgb.shape
+    ys, xs = np.nonzero(component)
+    representative = np.median(image_rgb[ys, xs], axis=0)
+
+    return ClosedBezierRegion(
+        segments=_catmull_rom_closed_segments(
+            approximation,
+            width=width,
+            height=height,
+            tension=0.72,
+        ),
+        color=_nearest_color(representative, palette),
+        opacity=opacity,
+    )
+
+
+def _closed_region_improves_error(
+    current_rgb: np.ndarray,
+    target_rgb: np.ndarray,
+    region: ClosedBezierRegion,
+    *,
+    min_relative_improvement: float,
+) -> tuple[bool, np.ndarray]:
+    height, width, _ = current_rgb.shape
+    overlay = render_strokes(
+        [region],
+        size=(width, height),
+        background=(0, 0, 0),
+        samples_per_curve=24,
+    )
+    mask = np.asarray(overlay, dtype=np.uint8).max(axis=2) > 0
+    if not np.any(mask):
+        return False, current_rgb
+
+    before = float(np.mean((current_rgb[mask] - target_rgb[mask]) ** 2))
+    color = np.asarray(region.color, dtype=np.float32)
+    alpha = float(region.opacity)
+    candidate = current_rgb.copy()
+    candidate[mask] = (1.0 - alpha) * candidate[mask] + alpha * color
+    after = float(np.mean((candidate[mask] - target_rgb[mask]) ** 2))
+    return after < before * (1.0 - min_relative_improvement), candidate
+
+
+def _fit_residual_closed_regions(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    *,
+    background: tuple[int, int, int],
+    max_regions: int,
+    opacity: float = 0.86,
+) -> list[ClosedBezierRegion]:
+    """Fit smooth closed regions to large coherent residual components."""
+    if max_regions <= 0:
+        return []
+
+    height, width, _ = image_rgb.shape
+    current_rgb = np.empty_like(image_rgb, dtype=np.float32)
+    current_rgb[...] = np.asarray(background, dtype=np.float32) / 255.0
+    regions: list[ClosedBezierRegion] = []
+
+    for quantile in (0.88, 0.80, 0.70, 0.60):
+        if len(regions) >= max_regions:
+            break
+
+        residual = normalize_map(np.linalg.norm(image_rgb - current_rgb, axis=2))
+        positive = residual[residual > 0.0]
+        if positive.size == 0:
+            break
+        threshold = float(np.quantile(positive, quantile))
+        binary = (residual >= threshold).astype(np.uint8)
+        kernel = np.ones((5, 5), dtype=np.uint8)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
+        label_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+            binary,
+            connectivity=8,
+        )
+        candidates: list[tuple[float, int]] = []
+        minimum_area = max(24, round(height * width * 0.00008))
+        for label in range(1, label_count):
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            if area >= minimum_area:
+                candidates.append((float(residual[labels == label].sum()), label))
+        candidates.sort(reverse=True)
+
+        for _score, label in candidates:
+            if len(regions) >= max_regions:
+                break
+            region = _fit_closed_bezier_region_to_component(
+                image_rgb,
+                palette,
+                labels,
+                label,
+                opacity=opacity,
+            )
+            if region is None:
+                continue
+            accepted, candidate_rgb = _closed_region_improves_error(
+                current_rgb,
+                image_rgb,
+                region,
+                min_relative_improvement=0.008,
+            )
+            if accepted:
+                regions.append(region)
+                current_rgb = candidate_rgb
+
+    return regions
+
+
+def paint_closed_region_rich_residual(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    total_primitives: int,
+    *,
+    seed: int = 0,
+    closed_region_fraction: float = 0.16,
+    ribbon_fraction: float = 0.08,
+    polygon_fraction: float = 0.12,
+) -> tuple[list[Primitive], tuple[int, int, int]]:
+    """Use smooth closed regions first, then ribbons/polygons, then detail strokes."""
+    if total_primitives < 1:
+        raise ValueError("total_primitives must be positive")
+    total_fraction = closed_region_fraction + ribbon_fraction + polygon_fraction
+    if min(closed_region_fraction, ribbon_fraction, polygon_fraction) < 0.0:
+        raise ValueError("primitive fractions must be non-negative")
+    if total_fraction >= 1.0:
+        raise ValueError("broad primitive fractions must sum to less than 1")
+
+    height, width, _ = image_rgb.shape
+    background = estimate_border_background(image_rgb)
+    gradient = normalize_map(gradient_magnitude(image_rgb))
+
+    region_budget = round(total_primitives * closed_region_fraction)
+    ribbon_budget = round(total_primitives * ribbon_fraction)
+    polygon_budget = round(total_primitives * polygon_fraction)
+
+    regions = _fit_residual_closed_regions(
+        image_rgb,
+        palette,
+        background=background,
+        max_regions=region_budget,
+    )
+    primitives: list[Primitive] = list(regions)
+
+    current = render_strokes(primitives, size=(width, height), background=background)
+    current_rgb = np.asarray(current, dtype=np.float32) / 255.0
+    residual_after_regions = normalize_map(np.linalg.norm(image_rgb - current_rgb, axis=2))
+    residual_image = (
+        residual_after_regions[..., None] * image_rgb
+        + (1.0 - residual_after_regions[..., None])
+        * (np.asarray(background, dtype=np.float32) / 255.0)
+    )
+
+    ribbons = _fit_residual_ribbons(
+        residual_image,
+        palette,
+        background=background,
+        max_ribbons=ribbon_budget,
+    )
+    primitives.extend(ribbons)
+
+    current = render_strokes(primitives, size=(width, height), background=background)
+    current_rgb = np.asarray(current, dtype=np.float32) / 255.0
+    residual_after_ribbons = normalize_map(np.linalg.norm(image_rgb - current_rgb, axis=2))
+    polygon_image = (
+        residual_after_ribbons[..., None] * image_rgb
+        + (1.0 - residual_after_ribbons[..., None])
+        * (np.asarray(background, dtype=np.float32) / 255.0)
+    )
+    polygons = _fit_residual_polygons(
+        polygon_image,
+        palette,
+        background=background,
+        max_patches=polygon_budget,
+        gradient=gradient,
+    )
+    primitives.extend(polygons)
+
+    remaining = total_primitives - len(primitives)
+    if remaining > 0:
+        current = render_strokes(primitives, size=(width, height), background=background)
+        current_rgb = np.asarray(current, dtype=np.float32) / 255.0
+        residual = normalize_map(np.linalg.norm(image_rgb - current_rgb, axis=2))
+        weight_map = 0.72 * residual + 0.28 * gradient
+        base = sample_gradient_strokes(
+            image_rgb,
+            palette,
+            remaining,
+            seed=seed + 701,
+            weight_map=weight_map,
+            min_length=0.006,
+            max_length=0.060,
+            width=0.008,
+            opacity=0.84,
+        )
+        primitives.extend(_to_tapered(base, seed=seed + 809))
+
+    return primitives, background
+
+
+def paint_adaptive_closed_region_residual(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    total_primitives: int,
+    *,
+    seed: int = 0,
+) -> tuple[list[Primitive], tuple[int, int, int]]:
+    """Adapt broad-region budget while reserving smooth closed-shape capacity."""
+    background = estimate_border_background(image_rgb)
+    ribbon_fraction, polygon_fraction = adaptive_primitive_fractions(
+        image_rgb,
+        background=background,
+    )
+    broad_total = min(0.52, ribbon_fraction + polygon_fraction + 0.12)
+    closed_fraction = float(np.clip(0.10 + 0.45 * broad_total, 0.12, 0.24))
+    remaining_broad = max(0.08, broad_total - closed_fraction)
+    scale = remaining_broad / max(ribbon_fraction + polygon_fraction, 1e-8)
+    return paint_closed_region_rich_residual(
+        image_rgb,
+        palette,
+        total_primitives,
+        seed=seed,
+        closed_region_fraction=closed_fraction,
+        ribbon_fraction=ribbon_fraction * scale,
+        polygon_fraction=polygon_fraction * scale,
     )

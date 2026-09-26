@@ -9,6 +9,7 @@ from pathlib import Path
 
 ALLOWED_PREFIXES = ("painter/", "scripts/", "tests/")
 ALLOWED_ROOT_FILES = {"README.md", "pyproject.toml"}
+PROTECTED_PREFIXES = ("painter/agent/",)
 PROTECTED_PATHS = {
     "painter/metrics.py",
     "painter/renderer.py",
@@ -126,7 +127,7 @@ class ProjectTools:
         for path in touched:
             relative = self._safe_relative(path)
             posix = relative.as_posix()
-            if posix in PROTECTED_PATHS:
+            if posix in PROTECTED_PATHS or posix.startswith(PROTECTED_PREFIXES):
                 raise ValueError(f"agent is not allowed to modify protected file: {posix}")
 
         result = subprocess.run(

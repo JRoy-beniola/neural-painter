@@ -68,29 +68,43 @@ class ProjectTools:
             f"{index + 1}: {line}"
             for index, line in enumerate(lines[start:stop], start=start)
         )
-        return selected[:MAX_READ_CHARS]
+        header = (
+            f"[{relative.as_posix()} lines {start + 1}-{stop} of {len(lines)}"
+            + ("; more lines available" if stop < len(lines) else "; EOF")
+            + "]\n"
+        )
+        return (header + selected)[:MAX_READ_CHARS]
 
     def search_code(self, query: str) -> str:
-        if not query.strip():
+        needle = query.strip()
+        if not needle:
             raise ValueError("search query must be non-empty")
-        return self._run(
-            [
-                "rg",
-                "-n",
-                "--glob",
-                "*.py",
-                "--glob",
-                "README.md",
-                "--glob",
-                "pyproject.toml",
-                query,
-                "painter",
-                "scripts",
-                "tests",
-                "README.md",
-                "pyproject.toml",
-            ]
-        )
+
+        candidates: list[Path] = []
+        for directory in ("painter", "scripts", "tests"):
+            root = self.root / directory
+            if root.is_dir():
+                candidates.extend(sorted(root.rglob("*.py")))
+        for name in ("README.md", "pyproject.toml"):
+            path = self.root / name
+            if path.is_file():
+                candidates.append(path)
+
+        matches: list[str] = []
+        for path in candidates:
+            relative = path.relative_to(self.root).as_posix()
+            for line_number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(),
+                start=1,
+            ):
+                if needle in line:
+                    matches.append(f"{relative}:{line_number}:{line}")
+                    if sum(len(item) + 1 for item in matches) >= MAX_TOOL_OUTPUT:
+                        return "\n".join(matches)[:MAX_TOOL_OUTPUT]
+
+        if not matches:
+            return f"no matches for literal query: {needle}"
+        return "\n".join(matches)[:MAX_TOOL_OUTPUT]
 
     def git_diff(self) -> str:
         return self._run(

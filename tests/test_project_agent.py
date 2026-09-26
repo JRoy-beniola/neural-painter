@@ -415,7 +415,7 @@ def test_native_coding_accepts_content_finish(
     }
 
 
-def test_native_coding_recovers_content_nonfinish(
+def test_native_coding_accepts_content_nonfinish_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _Response:
@@ -454,11 +454,6 @@ def test_native_coding_recovers_content_nonfinish(
     )
 
     assert json.loads(result) == {
-        "action": "invalid_model_response",
-        "content": json.dumps(
-            {
-                "action": "search_code",
-                "query": "adaptive",
-            }
-        ),
+        "action": "search_code",
+        "query": "adaptive",
     }

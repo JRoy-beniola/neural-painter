@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from painter.stroke import EllipsePatch, PolygonPatch, Stroke, TaperedStroke
+from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Stroke, TaperedStroke
 
 
 def make_stroke(**overrides: object) -> Stroke:
@@ -145,3 +145,20 @@ def test_polygon_patch_validates_vertices() -> None:
             vertices=((0.2, 0.2), (0.8, 0.2)),
             color=(0.2, 0.4, 0.7),
         )
+
+
+def test_bezier_ribbon_validates_and_evaluates() -> None:
+    ribbon = BezierRibbon(
+        p0=(0.1, 0.5),
+        p1=(0.3, 0.2),
+        p2=(0.7, 0.8),
+        p3=(0.9, 0.5),
+        width_start=0.02,
+        width_mid=0.08,
+        width_end=0.03,
+        color=(0.3, 0.6, 0.9),
+        opacity=0.8,
+    )
+    assert ribbon.point_at(0.0) == ribbon.p0
+    assert ribbon.point_at(1.0) == ribbon.p3
+    assert ribbon.width_at(0.5) == ribbon.width_mid

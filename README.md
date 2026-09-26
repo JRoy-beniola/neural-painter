@@ -401,3 +401,40 @@ python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
 Use `--cleanup-optimize-geometry` only for explicit geometry-cleanup ablations.
 When enabled, `--cleanup-geometry-drift-weight` penalizes control-point drift
 from the structure-stage result.
+
+
+### Polygon regions + contour-aware loss
+
+The next representation upgrade avoids any symmetry or object-template prior.
+It remains local and therefore compatible with later video transport.
+
+- `PolygonPatch` approximates arbitrary connected residual regions with compact
+  contour polygons instead of forcing every smooth mass into an ellipse.
+- `polygon_rich_residual` uses accepted polygon regions first, then tapered
+  Bezier strokes for detail.
+- `polygon_rich_refined_contour` keeps polygon regions raster-exact and refines
+  high-error tapered strokes with a stronger contour objective.
+
+The contour objective combines:
+
+```text
+MSE
++ multi-scale SSIM
++ Sobel edge magnitude
++ gradient-orientation alignment
++ Laplacian detail matching
+```
+
+Run the first direct comparison at the same 2000-primitive budget:
+
+```bash
+python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
+  --output-dir outputs/round23/fleur_polygon_contour_2000 \
+  --budgets 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --method polygon_rich_refined_contour \
+  --device cuda \
+  --optimized-stroke-count 256 \
+  --geometry-bound 0.02
+```

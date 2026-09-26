@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -162,6 +163,53 @@ def _laplacian_loss(rendered: torch.Tensor, target: torch.Tensor) -> torch.Tenso
     return torch.mean(torch.abs(lx - ly))
 
 
+def _target_edge_distance(target: torch.Tensor) -> torch.Tensor:
+    """Compute a fixed normalized Euclidean distance map to target contours."""
+    with torch.no_grad():
+        gx, gy = _sobel_components(target)
+        magnitude = torch.sqrt(gx * gx + gy * gy + 1e-8)[0, 0]
+        threshold = torch.quantile(magnitude.flatten(), 0.82)
+        edges = (magnitude >= threshold).detach().cpu().numpy().astype(np.uint8)
+        inverse = (1 - edges).astype(np.uint8)
+        distance = cv2.distanceTransform(inverse, cv2.DIST_L2, 5)
+        scale = max(float(distance.max()), 1.0)
+        distance = distance / scale
+    return torch.tensor(distance, dtype=target.dtype, device=target.device)
+
+
+def _positional_contour_loss(
+    rendered: torch.Tensor,
+    target: torch.Tensor,
+    target_distance: torch.Tensor,
+) -> torch.Tensor:
+    """Penalize displaced rendered edges and missing target contours."""
+    gx_rendered, gy_rendered = _sobel_components(rendered)
+    gx_target, gy_target = _sobel_components(target)
+    rendered_mag = torch.sqrt(gx_rendered * gx_rendered + gy_rendered * gy_rendered + 1e-8)[0, 0]
+    target_mag = torch.sqrt(gx_target * gx_target + gy_target * gy_target + 1e-8)[0, 0]
+
+    rendered_norm = rendered_mag / (rendered_mag.mean().detach() + 1e-6)
+    forward = torch.mean(rendered_norm * target_distance)
+
+    target_threshold = torch.quantile(target_mag.flatten().detach(), 0.82)
+    target_edges = (target_mag >= target_threshold).to(target.dtype)
+    local_rendered = torch.nn.functional.max_pool2d(
+        rendered_norm[None, None, :, :],
+        kernel_size=5,
+        stride=1,
+        padding=2,
+    )[0, 0]
+    coverage = torch.sum(target_edges * torch.exp(-local_rendered)) / (
+        torch.sum(target_edges) + 1e-6
+    )
+
+    target_energy = target_mag.mean().detach()
+    clutter = torch.relu(rendered_mag.mean() - 1.15 * target_energy) / (
+        target_energy + 1e-6
+    )
+    return forward + 0.35 * coverage + 0.05 * clutter
+
+
 def _resolve_device(device: str) -> str:
     if device == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
@@ -179,6 +227,7 @@ def _objective_loss(
     objective: str,
     ssim_weight: float,
     edge_weight: float,
+    target_edge_distance: torch.Tensor | None = None,
 ) -> torch.Tensor:
     mse = torch.mean((rendered - target) ** 2)
     if objective == "mse":
@@ -188,12 +237,21 @@ def _objective_loss(
             rendered,
             target,
         )
-    return (
+    contour = (
         mse
         + ssim_weight * _multi_scale_ssim_loss(rendered, target)
         + edge_weight * _edge_loss(rendered, target)
         + 0.05 * _edge_orientation_loss(rendered, target)
         + 0.05 * _laplacian_loss(rendered, target)
+    )
+    if objective == "contour":
+        return contour
+    if target_edge_distance is None:
+        target_edge_distance = _target_edge_distance(target)
+    return contour + 0.12 * _positional_contour_loss(
+        rendered,
+        target,
+        target_edge_distance,
     )
 
 
@@ -212,8 +270,10 @@ def _validate_refinement_args(
         raise ValueError("lr must be positive")
     if optimization_resolution < 16:
         raise ValueError("optimization_resolution must be at least 16")
-    if objective not in {"mse", "structure", "contour"}:
-        raise ValueError("objective must be one of: mse, structure, contour")
+    if objective not in {"mse", "structure", "contour", "positional_contour"}:
+        raise ValueError(
+            "objective must be one of: mse, structure, contour, positional_contour"
+        )
     if ssim_weight < 0.0 or edge_weight < 0.0:
         raise ValueError("structure loss weights must be non-negative")
 

@@ -359,7 +359,7 @@ def autonomous_research(
                             "research planner failed: "
                             f"{type(exc).__name__}: {exc}"
                         ),
-                        "mutation": planned_mutation,
+                        "mutation": mutation,
                     }
                 )
                 continue

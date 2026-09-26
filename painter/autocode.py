@@ -156,6 +156,15 @@ def _champion_metrics(summary: dict[str, Any]) -> dict[str, float]:
         "high_frequency_ratio": float(
             diagnostics.get("high_frequency_ratio", float("inf"))
         ),
+        "high_frequency_boundary_ratio": float(
+            diagnostics.get("high_frequency_boundary_ratio", float("inf"))
+        ),
+        "high_frequency_interior_ratio": float(
+            diagnostics.get("high_frequency_interior_ratio", float("inf"))
+        ),
+        "high_frequency_exterior_ratio": float(
+            diagnostics.get("high_frequency_exterior_ratio", float("inf"))
+        ),
         "runtime_ms": float(run.get("render_ms", float("inf"))),
     }
 
@@ -384,6 +393,7 @@ def autonomous_research(
                 primary_metric=draft.primary_metric,
                 expected_direction=draft.expected_direction,
                 min_effect_fraction=draft.min_effect_fraction,
+                target_value=draft.target_value,
                 locked_at=datetime.now(UTC).isoformat(),
             )
             scientific_memory.lock_protocol(protocol)

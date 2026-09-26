@@ -27,6 +27,7 @@ class OpenAICompatibleModel:
                 "temperature": 0.1,
                 "stream": False,
                 "response_format": {"type": "json_object"},
+                "reasoning_effort": "none",
             }
         ).encode("utf-8")
         headers = {"Content-Type": "application/json"}
@@ -48,7 +49,10 @@ class OpenAICompatibleModel:
             ) from exc
 
         try:
-            return str(body["choices"][0]["message"]["content"])
+            content = str(body["choices"][0]["message"]["content"])
+            if not content.strip():
+                raise RuntimeError("model endpoint returned empty assistant content")
+            return content
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError(
                 "model endpoint returned an unsupported chat-completions response"

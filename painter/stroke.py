@@ -184,4 +184,73 @@ class PolygonPatch:
         _validate_unit_interval(self.opacity, "opacity")
 
 
-Primitive: TypeAlias = Stroke | TaperedStroke | EllipsePatch | PolygonPatch
+@dataclass(frozen=True, slots=True)
+class BezierRibbon:
+    """Filled cubic Bezier ribbon with smoothly varying half-width."""
+
+    p0: Point
+    p1: Point
+    p2: Point
+    p3: Point
+    width_start: float
+    width_mid: float
+    width_end: float
+    color: RGB
+    opacity: float = 1.0
+
+    def __post_init__(self) -> None:
+        for name, point in (
+            ("p0", self.p0),
+            ("p1", self.p1),
+            ("p2", self.p2),
+            ("p3", self.p3),
+        ):
+            _validate_point(point, name)
+        for name, value in (
+            ("width_start", self.width_start),
+            ("width_mid", self.width_mid),
+            ("width_end", self.width_end),
+        ):
+            if not isfinite(value):
+                raise ValueError(f"{name} must be finite")
+            if not 0.0 < value <= 1.0:
+                raise ValueError(f"{name} must lie in (0, 1]")
+        _validate_rgb(self.color)
+        _validate_unit_interval(self.opacity, "opacity")
+
+    def point_at(self, t: float) -> Point:
+        _validate_unit_interval(t, "t")
+        u = 1.0 - t
+        return (
+            u**3 * self.p0[0]
+            + 3.0 * u * u * t * self.p1[0]
+            + 3.0 * u * t * t * self.p2[0]
+            + t**3 * self.p3[0],
+            u**3 * self.p0[1]
+            + 3.0 * u * u * t * self.p1[1]
+            + 3.0 * u * t * t * self.p2[1]
+            + t**3 * self.p3[1],
+        )
+
+    def tangent_at(self, t: float) -> Point:
+        _validate_unit_interval(t, "t")
+        u = 1.0 - t
+        return (
+            3.0 * u * u * (self.p1[0] - self.p0[0])
+            + 6.0 * u * t * (self.p2[0] - self.p1[0])
+            + 3.0 * t * t * (self.p3[0] - self.p2[0]),
+            3.0 * u * u * (self.p1[1] - self.p0[1])
+            + 6.0 * u * t * (self.p2[1] - self.p1[1])
+            + 3.0 * t * t * (self.p3[1] - self.p2[1]),
+        )
+
+    def width_at(self, t: float) -> float:
+        _validate_unit_interval(t, "t")
+        if t <= 0.5:
+            local = 2.0 * t
+            return (1.0 - local) * self.width_start + local * self.width_mid
+        local = 2.0 * (t - 0.5)
+        return (1.0 - local) * self.width_mid + local * self.width_end
+
+
+Primitive: TypeAlias = Stroke | TaperedStroke | EllipsePatch | PolygonPatch | BezierRibbon

@@ -415,7 +415,7 @@ def test_native_coding_accepts_content_finish(
     }
 
 
-def test_native_coding_rejects_content_nonfinish(
+def test_native_coding_recovers_content_nonfinish(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _Response:
@@ -448,8 +448,17 @@ def test_native_coding_rejects_content_nonfinish(
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     model = OpenAICompatibleModel("http://localhost:11434/v1", "test-model")
-    with pytest.raises(RuntimeError, match="no coding tool call"):
-        model.complete(
-            [{"role": "user", "content": "Keep working."}],
-            response_format=CODING_ACTION_RESPONSE_FORMAT,
-        )
+    result = model.complete(
+        [{"role": "user", "content": "Keep working."}],
+        response_format=CODING_ACTION_RESPONSE_FORMAT,
+    )
+
+    assert json.loads(result) == {
+        "action": "invalid_model_response",
+        "content": json.dumps(
+            {
+                "action": "search_code",
+                "query": "adaptive",
+            }
+        ),
+    }

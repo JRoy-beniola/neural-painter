@@ -20,6 +20,7 @@ from painter.refine import (
 )
 from painter.renderer import render_strokes
 from painter.rich import (
+    paint_adaptive_closed_region_residual,
     paint_adaptive_rich_residual,
     paint_mixed_rich_residual,
     paint_polygon_rich_residual,
@@ -27,17 +28,25 @@ from painter.rich import (
     paint_rich_residual,
 )
 from painter.rich_refine import (
+    refine_adaptive_closed_region_primitives,
     refine_mixed_rich_primitives_ordered,
     refine_polygon_rich_primitives_ordered,
     refine_region_rich_primitives_ordered,
     refine_region_rich_primitives_scheduled,
 )
 from painter.sampling import sample_gradient_strokes
-from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Stroke, TaperedStroke
+from painter.stroke import (
+    BezierRibbon,
+    ClosedBezierRegion,
+    EllipsePatch,
+    PolygonPatch,
+    Stroke,
+    TaperedStroke,
+)
 from painter.structured import paint_structured_residual
 
 DEFAULT_BUDGETS = (100, 250, 500, 1000, 2000)
-METHODS = ("static", "residual", "structured", "rich_residual", "region_rich_residual", "polygon_rich_residual", "polygon_rich_refined_contour", "mixed_rich_residual", "adaptive_rich_residual", "mixed_rich_refined_positional", "region_rich_refined", "region_rich_refined_structure", "region_rich_refined_schedule", "refined", "refined_structure", "global_refined", "global_refined_structure", "staged_refined", "staged_refined_structure")
+METHODS = ("static", "residual", "structured", "rich_residual", "region_rich_residual", "polygon_rich_residual", "polygon_rich_refined_contour", "mixed_rich_residual", "adaptive_rich_residual", "adaptive_closed_region_residual", "adaptive_closed_region_refined", "mixed_rich_refined_positional", "region_rich_refined", "region_rich_refined_structure", "region_rich_refined_schedule", "refined", "refined_structure", "global_refined", "global_refined_structure", "staged_refined", "staged_refined_structure")
 
 
 def run_budget_experiment(
@@ -147,6 +156,26 @@ def run_budget_experiment(
                 seed=seed,
             )
             refinement = None
+        elif method == "adaptive_closed_region_residual":
+            strokes, background = paint_adaptive_closed_region_residual(
+                target_rgb,
+                palette,
+                budget,
+                seed=seed,
+            )
+            refinement = None
+        elif method == "adaptive_closed_region_refined":
+            strokes, background, refinement = refine_adaptive_closed_region_primitives(
+                target_rgb,
+                palette,
+                budget,
+                seed=seed,
+                device=device,
+                max_refine_strokes=(
+                    256 if optimized_stroke_count is None else optimized_stroke_count
+                ),
+                geometry_bound=geometry_bound,
+            )
         elif method == "mixed_rich_refined_positional":
             strokes, background, refinement = refine_mixed_rich_primitives_ordered(
                 target_rgb,
@@ -288,6 +317,9 @@ def run_budget_experiment(
             "ellipse_patch": sum(isinstance(item, EllipsePatch) for item in strokes),
             "polygon_patch": sum(isinstance(item, PolygonPatch) for item in strokes),
             "bezier_ribbon": sum(isinstance(item, BezierRibbon) for item in strokes),
+            "closed_bezier_region": sum(
+                isinstance(item, ClosedBezierRegion) for item in strokes
+            ),
         }
         run: dict[str, object] = {
             "stroke_count": budget,
@@ -314,6 +346,8 @@ def run_budget_experiment(
                 "accepted_by_raster": refinement.accepted_by_raster,
                 "raster_mse_before": refinement.raster_mse_before,
                 "raster_mse_after": refinement.raster_mse_after,
+                "raster_checkpoints": refinement.raster_checkpoints,
+                "best_raster_step": refinement.best_raster_step,
             }
         runs.append(run)
 

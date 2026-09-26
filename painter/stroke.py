@@ -165,10 +165,6 @@ class EllipsePatch:
         _validate_unit_interval(self.opacity, "opacity")
 
 
-Primitive: TypeAlias = Stroke | TaperedStroke | EllipsePatch | PolygonPatch
-
-
-
 @dataclass(frozen=True, slots=True)
 class PolygonPatch:
     """Filled polygonal region primitive for arbitrary local image masses."""
@@ -186,3 +182,6 @@ class PolygonPatch:
             _validate_point(point, f"vertices[{index}]")
         _validate_rgb(self.color)
         _validate_unit_interval(self.opacity, "opacity")
+
+
+Primitive: TypeAlias = Stroke | TaperedStroke | EllipsePatch | PolygonPatch

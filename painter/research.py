@@ -13,6 +13,18 @@ import numpy as np
 from painter.experiment import run_budget_experiment
 
 
+IMPLEMENTED_CAPABILITIES = frozenset(
+    {
+        "adaptive_allocator",
+        "closed_bezier_regions",
+        "contour_economy",
+        "raster_checkpointing",
+        "polygon_regions",
+        "bezier_ribbons",
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ExperimentCandidate:
     """One bounded painter experiment configuration."""
@@ -47,8 +59,20 @@ def diagnose_run(run: dict[str, Any]) -> list[Diagnosis]:
     boundary_distance = float(diagnostics.get("mean_boundary_distance_px", 0.0))
     edge_ratio = float(diagnostics.get("edge_energy_ratio", 1.0))
     frequency_ratio = float(diagnostics.get("high_frequency_ratio", 1.0))
-    residual_fraction = float(
-        diagnostics.get("largest_residual_component_fraction", 0.0)
+    boundary_frequency = float(
+        diagnostics.get("high_frequency_boundary_ratio", frequency_ratio)
+    )
+    interior_frequency = float(
+        diagnostics.get("high_frequency_interior_ratio", frequency_ratio)
+    )
+    exterior_frequency = float(
+        diagnostics.get("high_frequency_exterior_ratio", frequency_ratio)
+    )
+    residual_pixel_fraction = float(
+        diagnostics.get("residual_pixel_fraction", 0.0)
+    )
+    residual_energy_share = float(
+        diagnostics.get("largest_residual_component_energy_share", 0.0)
     )
 
     refinement = run.get("refinement")
@@ -56,18 +80,19 @@ def diagnose_run(run: dict[str, Any]) -> list[Diagnosis]:
         initial = float(refinement.get("initial_loss", 0.0))
         final = float(refinement.get("final_loss", initial))
         relative_drop = (initial - final) / max(abs(initial), 1e-8)
-        if relative_drop > 0.25 and float(run.get("mse", 0.0)) > 0.012:
+        accepted = refinement.get("accepted_by_raster")
+        if relative_drop > 0.25 and accepted is False:
             findings.append(
                 Diagnosis(
                     code="surrogate_mismatch",
                     severity=min(relative_drop, 1.0),
                     evidence=(
-                        f"internal objective dropped {relative_drop:.1%} while "
-                        f"final raster MSE remained {float(run.get('mse', 0.0)):.5f}"
+                        f"surrogate objective dropped {relative_drop:.1%}, but "
+                        "real-raster checkpointing rejected the candidate"
                     ),
                     recommendation=(
-                        "prefer unrefined or conservative variants; inspect loss/raster "
-                        "alignment before adding optimization"
+                        "reduce reliance on this surrogate or change the optimized "
+                        "parameter subset before further refinement"
                     ),
                 )
             )
@@ -79,7 +104,7 @@ def diagnose_run(run: dict[str, Any]) -> list[Diagnosis]:
                 severity=min((0.82 - foreground_iou) / 0.35, 1.0),
                 evidence=f"foreground IoU is only {foreground_iou:.3f}",
                 recommendation=(
-                    "increase broad-region capacity or change primitive allocation before cleanup"
+                    "change broad-region initialization before spending more budget on detail"
                 ),
             )
         )
@@ -88,45 +113,65 @@ def diagnose_run(run: dict[str, Any]) -> list[Diagnosis]:
         findings.append(
             Diagnosis(
                 code="boundary_placement",
-                severity=min(max((0.60 - boundary_f1) / 0.35, boundary_distance / 12.0), 1.0),
+                severity=min(
+                    max((0.60 - boundary_f1) / 0.35, boundary_distance / 12.0),
+                    1.0,
+                ),
                 evidence=(
                     f"boundary F1={boundary_f1:.3f}, mean symmetric boundary "
                     f"distance={boundary_distance:.2f}px"
                 ),
                 recommendation=(
-                    "favor region/ribbon initialization over more detail strokes; only use "
-                    "contour refinement if it improves held-out raster metrics"
+                    "improve smooth-region boundary fitting or optimize structural "
+                    "region geometry before local detail"
                 ),
             )
         )
 
-    if edge_ratio > 1.35 or frequency_ratio > 1.50:
-        severity = max((edge_ratio - 1.0) / 1.5, (frequency_ratio - 1.0) / 2.0)
+    localized_peak = max(boundary_frequency, interior_frequency, exterior_frequency)
+    if edge_ratio > 1.35 or localized_peak > 1.50:
+        if localized_peak == boundary_frequency:
+            location = "boundary"
+        elif localized_peak == interior_frequency:
+            location = "interior"
+        else:
+            location = "exterior"
+        severity = max(
+            (edge_ratio - 1.0) / 1.5,
+            (localized_peak - 1.0) / 2.0,
+        )
         findings.append(
             Diagnosis(
                 code="clutter",
                 severity=min(severity, 1.0),
                 evidence=(
-                    f"edge-energy ratio={edge_ratio:.2f}, high-frequency ratio="
-                    f"{frequency_ratio:.2f}"
+                    f"edge-energy ratio={edge_ratio:.2f}; excess high-frequency "
+                    f"energy is strongest in the {location} "
+                    f"(ratio={localized_peak:.2f})"
                 ),
                 recommendation=(
-                    "reduce refinement/detail authority and prefer broad region primitives"
+                    f"target {location} fragmentation specifically rather than "
+                    "globally suppressing all edge energy"
                 ),
             )
         )
 
-    if residual_fraction > 0.08:
+    if residual_pixel_fraction > 0.03 and residual_energy_share > 0.30:
         findings.append(
             Diagnosis(
                 code="capacity_allocation",
-                severity=min(residual_fraction / 0.25, 1.0),
+                severity=min(
+                    max(residual_pixel_fraction / 0.15, residual_energy_share / 0.60),
+                    1.0,
+                ),
                 evidence=(
-                    "largest high-error connected region occupies "
-                    f"{residual_fraction:.1%} of the image"
+                    f"{residual_pixel_fraction:.1%} of pixels exceed the robust "
+                    "error threshold and the largest component carries "
+                    f"{residual_energy_share:.1%} of total residual energy"
                 ),
                 recommendation=(
-                    "allocate more budget to polygons/ribbons rather than local cleanup"
+                    "allocate additional structural capacity only if this coherent "
+                    "energy concentration persists across frontier runs"
                 ),
             )
         )
@@ -332,6 +377,59 @@ def champion_record(
     return min(frontier, key=key)
 
 
+def champion_records(
+    records: list[dict[str, Any]],
+) -> dict[str, dict[str, Any] | None]:
+    """Expose separate champions for reconstruction, boundaries, clutter, and speed."""
+    frontier = pareto_front(records)
+    if not frontier:
+        return {
+            "reconstruction": None,
+            "boundary": None,
+            "clutter": None,
+            "runtime": None,
+        }
+
+    def run(record: dict[str, Any]) -> dict[str, Any]:
+        return record["report"]["runs"][0]
+
+    return {
+        "reconstruction": min(
+            frontier,
+            key=lambda record: (
+                float(run(record).get("mse", float("inf"))),
+                -float(run(record).get("ssim", 0.0)),
+            ),
+        ),
+        "boundary": min(
+            frontier,
+            key=lambda record: (
+                -float(run(record).get("diagnostics", {}).get("boundary_f1", 0.0)),
+                float(
+                    run(record)
+                    .get("diagnostics", {})
+                    .get("mean_boundary_distance_px", float("inf"))
+                ),
+            ),
+        ),
+        "clutter": min(
+            frontier,
+            key=lambda record: abs(
+                float(
+                    run(record)
+                    .get("diagnostics", {})
+                    .get("high_frequency_ratio", 1.0)
+                )
+                - 1.0
+            ),
+        ),
+        "runtime": min(
+            frontier,
+            key=lambda record: float(run(record).get("render_ms", float("inf"))),
+        ),
+    }
+
+
 def frontier_diagnoses(
     records: list[dict[str, Any]],
 ) -> tuple[list[Diagnosis], list[Diagnosis]]:
@@ -399,53 +497,109 @@ def merge_diagnoses(
     return sorted(merged.values(), key=lambda item: item.severity, reverse=True)
 
 
-def mutation_plan(diagnoses: list[Diagnosis]) -> list[dict[str, str]]:
-    """Translate unresolved diagnoses into bounded code-level research proposals."""
+def mutation_plan(
+    diagnoses: list[Diagnosis],
+    *,
+    capabilities: frozenset[str] = IMPLEMENTED_CAPABILITIES,
+) -> list[dict[str, str]]:
+    """Translate unresolved failures into genuinely new code-level proposals."""
     proposals: list[dict[str, str]] = []
     codes = {diagnosis.code for diagnosis in diagnoses}
 
-    if "global_structure" in codes or "capacity_allocation" in codes:
-        proposals.append(
-            {
-                "area": "painter/rich.py",
-                "hypothesis": "broad residual regions are underrepresented",
-                "change": (
-                    "use the adaptive allocator and extend it only if frontier evidence "
-                    "shows coherent residual regions remain underrepresented"
-                ),
-            }
-        )
+    if "capacity_allocation" in codes:
+        if "adaptive_allocator" in capabilities:
+            proposals.append(
+                {
+                    "area": "painter/rich.py",
+                    "hypothesis": (
+                        "the existing adaptive allocator still assigns structural "
+                        "capacity using insufficient topology features"
+                    ),
+                    "change": (
+                        "condition allocation on residual-energy share, component "
+                        "eccentricity, and boundary error instead of area alone"
+                    ),
+                }
+            )
+        else:
+            proposals.append(
+                {
+                    "area": "painter/rich.py",
+                    "hypothesis": "broad residual regions are underrepresented",
+                    "change": "add an adaptive structural/detail allocator",
+                }
+            )
+
     if "clutter" in codes:
-        proposals.append(
-            {
-                "area": "painter/refine.py",
-                "hypothesis": "detail optimization creates excess high-frequency contours",
-                "change": (
-                    "add an explicit contour-economy regularizer and ablate it independently"
-                ),
-            }
-        )
+        if "contour_economy" in capabilities:
+            proposals.append(
+                {
+                    "area": "painter/refine.py",
+                    "hypothesis": (
+                        "global contour economy is too coarse; clutter is spatially localized"
+                    ),
+                    "change": (
+                        "make the high-frequency penalty region-aware using boundary, "
+                        "interior, and exterior masks from target diagnostics"
+                    ),
+                }
+            )
+        else:
+            proposals.append(
+                {
+                    "area": "painter/refine.py",
+                    "hypothesis": "detail optimization creates excess high-frequency contours",
+                    "change": "add a contour-economy regularizer",
+                }
+            )
+
     if "surrogate_mismatch" in codes:
-        proposals.append(
-            {
-                "area": "painter/rich_refine.py",
-                "hypothesis": "surrogate optimization is not transferring to the final raster",
-                "change": (
-                    "real-raster acceptance is now mandatory; inspect any remaining "
-                    "surrogate mismatch only after rejected refinements are excluded"
-                ),
-            }
-        )
+        if "raster_checkpointing" in capabilities:
+            proposals.append(
+                {
+                    "area": "painter/rich_refine.py",
+                    "hypothesis": (
+                        "checkpointing prevents regressions, but the surrogate still wastes "
+                        "optimization effort in non-transferable directions"
+                    ),
+                    "change": (
+                        "use real-raster checkpoint trends for early stopping and adaptive "
+                        "step-size reduction"
+                    ),
+                }
+            )
+        else:
+            proposals.append(
+                {
+                    "area": "painter/rich_refine.py",
+                    "hypothesis": "surrogate optimization does not transfer to final raster",
+                    "change": "add checkpointed real-raster acceptance",
+                }
+            )
+
     if "boundary_placement" in codes:
-        proposals.append(
-            {
-                "area": "painter/rich.py",
-                "hypothesis": "region initialization does not place smooth boundaries accurately",
-                "change": (
-                    "evaluate adaptive closed Bezier regions before adding more detail refinement"
-                ),
-            }
-        )
+        if "closed_bezier_regions" in capabilities:
+            proposals.append(
+                {
+                    "area": "painter/rich.py",
+                    "hypothesis": (
+                        "closed Bezier regions exist, but their contour fitting is too crude"
+                    ),
+                    "change": (
+                        "locally optimize closed-region control points against boundary "
+                        "distance before allocating detail strokes"
+                    ),
+                }
+            )
+        else:
+            proposals.append(
+                {
+                    "area": "painter/rich.py",
+                    "hypothesis": "smooth filled regions are missing from the primitive set",
+                    "change": "add closed smooth spline regions",
+                }
+            )
+
     return proposals
 
 
@@ -522,6 +676,7 @@ def run_autoresearch(
 
     frontier = pareto_front(records)
     champion = champion_record(records)
+    category_champions = champion_records(records)
     champion_findings, persistent_findings = frontier_diagnoses(records)
     active_findings = merge_diagnoses(champion_findings, persistent_findings)
     summary = {
@@ -545,6 +700,19 @@ def run_autoresearch(
             if champion is not None
             else None
         ),
+        "category_champions": {
+            name: (
+                {
+                    "iteration": record["iteration"],
+                    "candidate": record["candidate"],
+                    "metrics": record["report"]["runs"][0],
+                }
+                if record is not None
+                else None
+            )
+            for name, record in category_champions.items()
+        },
+        "implemented_capabilities": sorted(IMPLEMENTED_CAPABILITIES),
         "champion_diagnoses": [asdict(item) for item in champion_findings],
         "persistent_frontier_diagnoses": [
             asdict(item) for item in persistent_findings

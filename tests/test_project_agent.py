@@ -10,7 +10,6 @@ from urllib.request import Request
 import pytest
 
 from painter.agent.agent import CODING_ACTION_RESPONSE_FORMAT, NeuralPainterAgent
-from painter.agent.agent import CODING_ACTION_RESPONSE_FORMAT
 from painter.agent.model import OpenAICompatibleModel, parse_json_action
 from painter.agent.tools import ProjectTools
 

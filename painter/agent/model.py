@@ -8,7 +8,6 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-
 CODING_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",

@@ -5,7 +5,14 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Stroke, TaperedStroke
+from painter.stroke import (
+    BezierRibbon,
+    ClosedBezierRegion,
+    EllipsePatch,
+    PolygonPatch,
+    Stroke,
+    TaperedStroke,
+)
 
 
 def make_stroke(**overrides: object) -> Stroke:
@@ -162,3 +169,18 @@ def test_bezier_ribbon_validates_and_evaluates() -> None:
     assert ribbon.point_at(0.0) == ribbon.p0
     assert ribbon.point_at(1.0) == ribbon.p3
     assert ribbon.width_at(0.5) == ribbon.width_mid
+
+
+
+def test_closed_bezier_region_validates_closed_chain() -> None:
+    region = ClosedBezierRegion(
+        segments=(
+            ((0.2, 0.2), (0.4, 0.1), (0.6, 0.1), (0.8, 0.2)),
+            ((0.8, 0.2), (0.9, 0.4), (0.9, 0.6), (0.8, 0.8)),
+            ((0.8, 0.8), (0.6, 0.9), (0.4, 0.9), (0.2, 0.8)),
+            ((0.2, 0.8), (0.1, 0.6), (0.1, 0.4), (0.2, 0.2)),
+        ),
+        color=(0.2, 0.5, 0.8),
+        opacity=0.9,
+    )
+    assert len(region.segments) == 4

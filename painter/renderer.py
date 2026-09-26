@@ -7,7 +7,7 @@ from collections.abc import Iterable
 
 from PIL import Image, ImageDraw
 
-from painter.stroke import EllipsePatch, Primitive, Stroke, TaperedStroke
+from painter.stroke import EllipsePatch, PolygonPatch, Primitive, Stroke, TaperedStroke
 
 
 def _to_pixel(point: tuple[float, float], width: int, height: int) -> tuple[float, float]:
@@ -98,6 +98,18 @@ def _render_patch(
     draw.polygon(points, fill=(*_rgb8(patch.color), alpha))
 
 
+def _render_polygon_patch(
+    draw: ImageDraw.ImageDraw,
+    patch: PolygonPatch,
+    *,
+    width: int,
+    height: int,
+) -> None:
+    points = [_to_pixel(point, width, height) for point in patch.vertices]
+    alpha = round(patch.opacity * 255)
+    draw.polygon(points, fill=(*_rgb8(patch.color), alpha))
+
+
 def render_primitive_overlay(
     primitive: Primitive,
     *,
@@ -132,6 +144,8 @@ def render_primitive_overlay(
         )
     elif isinstance(primitive, EllipsePatch):
         _render_patch(draw, primitive, width=width, height=height)
+    elif isinstance(primitive, PolygonPatch):
+        _render_polygon_patch(draw, primitive, width=width, height=height)
     else:
         raise TypeError(f"unsupported primitive type: {type(primitive)!r}")
 

@@ -11,7 +11,7 @@ from painter.background import estimate_border_background
 from painter.iterative import normalize_map
 from painter.renderer import render_strokes
 from painter.sampling import gradient_magnitude, sample_gradient_strokes
-from painter.stroke import EllipsePatch, Primitive, TaperedStroke
+from painter.stroke import EllipsePatch, PolygonPatch, Primitive, TaperedStroke
 
 
 def _nearest_color(pixel: np.ndarray, palette: np.ndarray) -> tuple[float, float, float]:
@@ -392,5 +392,224 @@ def paint_region_rich_residual(
             opacity=0.88,
         )
         primitives.extend(_to_tapered(base, seed=seed + 211))
+
+    return primitives, background
+
+
+
+def _polygon_mask(
+    shape: tuple[int, int],
+    patch: PolygonPatch,
+) -> np.ndarray:
+    """Rasterize one normalized polygon patch to a boolean mask."""
+    height, width = shape
+    points = np.asarray(
+        [
+            (
+                round(vertex[0] * max(width - 1, 1)),
+                round(vertex[1] * max(height - 1, 1)),
+            )
+            for vertex in patch.vertices
+        ],
+        dtype=np.int32,
+    )
+    mask = np.zeros((height, width), dtype=np.uint8)
+    cv2.fillPoly(mask, [points], 1)
+    return mask.astype(bool)
+
+
+def _fit_polygon_to_component(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    labels: np.ndarray,
+    label: int,
+    *,
+    opacity: float,
+    max_vertices: int = 12,
+) -> PolygonPatch | None:
+    """Approximate one residual component with a compact contour polygon."""
+    component = (labels == label).astype(np.uint8)
+    contours, _ = cv2.findContours(
+        component,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    if not contours:
+        return None
+
+    contour = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(contour) < 8.0:
+        return None
+
+    perimeter = cv2.arcLength(contour, True)
+    epsilon = max(1.0, 0.012 * perimeter)
+    approximation = cv2.approxPolyDP(contour, epsilon, True).reshape(-1, 2)
+
+    while len(approximation) > max_vertices:
+        epsilon *= 1.35
+        approximation = cv2.approxPolyDP(contour, epsilon, True).reshape(-1, 2)
+
+    if len(approximation) < 3:
+        return None
+
+    height, width, _ = image_rgb.shape
+    vertices = tuple(
+        (
+            float(np.clip(x / max(width - 1, 1), 0.0, 1.0)),
+            float(np.clip(y / max(height - 1, 1), 0.0, 1.0)),
+        )
+        for x, y in approximation
+    )
+
+    ys, xs = np.nonzero(component)
+    representative = np.median(image_rgb[ys, xs], axis=0)
+    color = _nearest_color(representative, palette)
+    return PolygonPatch(
+        vertices=vertices,
+        color=color,
+        opacity=opacity,
+    )
+
+
+def _polygon_improves_error(
+    current_rgb: np.ndarray,
+    target_rgb: np.ndarray,
+    patch: PolygonPatch,
+    *,
+    min_relative_improvement: float,
+) -> tuple[bool, np.ndarray]:
+    """Accept only polygon patches that reduce local raster error."""
+    mask = _polygon_mask(current_rgb.shape[:2], patch)
+    if not np.any(mask):
+        return False, current_rgb
+
+    before = float(np.mean((current_rgb[mask] - target_rgb[mask]) ** 2))
+    color = np.asarray(patch.color, dtype=np.float32)
+    candidate = current_rgb.copy()
+    alpha = float(patch.opacity)
+    candidate[mask] = (1.0 - alpha) * candidate[mask] + alpha * color
+    after = float(np.mean((candidate[mask] - target_rgb[mask]) ** 2))
+    return after < before * (1.0 - min_relative_improvement), candidate
+
+
+def _fit_residual_polygons(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    *,
+    background: tuple[int, int, int],
+    max_patches: int,
+    gradient: np.ndarray,
+    opacity: float = 0.84,
+) -> list[PolygonPatch]:
+    """Fit compact polygons to high-residual, locally smooth image regions."""
+    if max_patches <= 0:
+        return []
+
+    height, width, _ = image_rgb.shape
+    current_rgb = np.empty_like(image_rgb, dtype=np.float32)
+    current_rgb[...] = np.asarray(background, dtype=np.float32) / 255.0
+    smoothness = 1.0 - gradient
+    patches: list[PolygonPatch] = []
+    quantiles = (0.92, 0.86, 0.80, 0.72, 0.64, 0.56)
+
+    for quantile in quantiles:
+        if len(patches) >= max_patches:
+            break
+
+        residual = normalize_map(np.linalg.norm(image_rgb - current_rgb, axis=2))
+        score = residual * (0.15 + 0.85 * smoothness**1.4)
+        positive = score[score > 0.0]
+        if positive.size == 0:
+            break
+
+        threshold = float(np.quantile(positive, quantile))
+        binary = (score >= threshold).astype(np.uint8)
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
+        label_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+            binary,
+            connectivity=8,
+        )
+        candidates: list[tuple[float, int]] = []
+        minimum_area = max(8, round(height * width * 0.00002))
+        for label in range(1, label_count):
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            if area < minimum_area:
+                continue
+            candidates.append((float(score[labels == label].sum()), label))
+
+        candidates.sort(reverse=True)
+        for _component_score, label in candidates:
+            if len(patches) >= max_patches:
+                break
+            patch = _fit_polygon_to_component(
+                image_rgb,
+                palette,
+                labels,
+                label,
+                opacity=opacity,
+            )
+            if patch is None:
+                continue
+            accepted, candidate_rgb = _polygon_improves_error(
+                current_rgb,
+                image_rgb,
+                patch,
+                min_relative_improvement=0.008,
+            )
+            if accepted:
+                patches.append(patch)
+                current_rgb = candidate_rgb
+
+    return patches
+
+
+def paint_polygon_rich_residual(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    total_primitives: int,
+    *,
+    seed: int = 0,
+    patch_fraction: float = 0.22,
+) -> tuple[list[Primitive], tuple[int, int, int]]:
+    """Paint broad arbitrary regions with polygons and detail with tapered strokes."""
+    if total_primitives < 1:
+        raise ValueError("total_primitives must be positive")
+    if not 0.0 <= patch_fraction < 1.0:
+        raise ValueError("patch_fraction must lie in [0, 1)")
+
+    height, width, _ = image_rgb.shape
+    background = estimate_border_background(image_rgb)
+    gradient = normalize_map(gradient_magnitude(image_rgb))
+    patch_budget = round(total_primitives * patch_fraction)
+    patches = _fit_residual_polygons(
+        image_rgb,
+        palette,
+        background=background,
+        max_patches=patch_budget,
+        gradient=gradient,
+    )
+    primitives: list[Primitive] = list(patches)
+
+    stroke_count = total_primitives - len(primitives)
+    if stroke_count:
+        current = render_strokes(primitives, size=(width, height), background=background)
+        current_rgb = np.asarray(current, dtype=np.float32) / 255.0
+        residual = normalize_map(np.linalg.norm(image_rgb - current_rgb, axis=2))
+        weight_map = 0.78 * residual + 0.22 * gradient
+        base = sample_gradient_strokes(
+            image_rgb,
+            palette,
+            stroke_count,
+            seed=seed + 307,
+            weight_map=weight_map,
+            min_length=0.006,
+            max_length=0.070,
+            width=0.010,
+            opacity=0.88,
+        )
+        primitives.extend(_to_tapered(base, seed=seed + 401))
 
     return primitives, background

@@ -863,3 +863,86 @@ def paint_mixed_rich_residual(
         primitives.extend(_to_tapered(base, seed=seed + 607))
 
     return primitives, background
+
+
+
+def adaptive_primitive_fractions(
+    image_rgb: np.ndarray,
+    *,
+    background: tuple[int, int, int] | None = None,
+) -> tuple[float, float]:
+    """Choose ribbon and polygon budget fractions from residual topology.
+
+    Large connected residual components increase broad-region allocation.
+    Elongated components bias that broad budget toward ribbons; compact
+    components bias it toward polygons.
+    """
+    if background is None:
+        background = estimate_border_background(image_rgb)
+    background_rgb = np.asarray(background, dtype=np.float32) / 255.0
+    residual = np.linalg.norm(image_rgb - background_rgb, axis=2)
+    positive = residual[residual > 0.02]
+    if positive.size == 0:
+        return 0.05, 0.10
+
+    threshold = float(np.quantile(positive, 0.72))
+    binary = (residual >= threshold).astype(np.uint8)
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+
+    total_area = image_rgb.shape[0] * image_rgb.shape[1]
+    coherent_area = 0
+    elongated_area = 0
+    for label in range(1, count):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < max(12, round(total_area * 0.00003)):
+            continue
+        ys, xs = np.nonzero(labels == label)
+        if len(xs) < 4:
+            continue
+        coords = np.column_stack((xs.astype(float), ys.astype(float)))
+        covariance = np.cov(coords, rowvar=False)
+        values = np.linalg.eigvalsh(covariance)
+        minor = max(float(values[0]), 1e-8)
+        major = max(float(values[1]), minor)
+        coherent_area += area
+        if major / minor >= 2.0:
+            elongated_area += area
+
+    coherent_fraction = min(coherent_area / max(total_area, 1), 0.45)
+    broad_fraction = float(np.clip(0.16 + 1.35 * coherent_fraction, 0.18, 0.48))
+    elongated_share = elongated_area / max(coherent_area, 1)
+
+    ribbon_fraction = float(np.clip(broad_fraction * elongated_share, 0.04, 0.22))
+    polygon_fraction = float(
+        np.clip(broad_fraction - ribbon_fraction, 0.12, 0.34)
+    )
+    if ribbon_fraction + polygon_fraction > 0.55:
+        scale = 0.55 / (ribbon_fraction + polygon_fraction)
+        ribbon_fraction *= scale
+        polygon_fraction *= scale
+    return ribbon_fraction, polygon_fraction
+
+
+def paint_adaptive_rich_residual(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    total_primitives: int,
+    *,
+    seed: int = 0,
+) -> tuple[list[Primitive], tuple[int, int, int]]:
+    """Paint with an input-adaptive mix of ribbons, polygons, and detail strokes."""
+    background = estimate_border_background(image_rgb)
+    ribbon_fraction, polygon_fraction = adaptive_primitive_fractions(
+        image_rgb,
+        background=background,
+    )
+    return paint_mixed_rich_residual(
+        image_rgb,
+        palette,
+        total_primitives,
+        seed=seed,
+        ribbon_fraction=ribbon_fraction,
+        polygon_fraction=polygon_fraction,
+    )

@@ -493,3 +493,46 @@ python scripts/run_budget_experiment.py assets/inputs/fleur_de_lis.png \
   --optimized-stroke-count 256 \
   --geometry-bound 0.02
 ```
+
+
+## Autoresearch controller
+
+Neural Painter now has a bounded self-diagnosing experiment loop. Instead of
+manually choosing one new painter variant at a time, the controller:
+
+1. runs a candidate painter configuration,
+2. records reconstruction, structural, contour, clutter, residual-topology,
+   primitive-usage, runtime, and refinement diagnostics,
+3. classifies dominant failure modes,
+4. selects the next unexplored experiment from a safe bounded search space,
+5. maintains a multi-objective Pareto frontier,
+6. writes explicit code-level mutation proposals when the current mechanism set
+   cannot resolve the measured failure.
+
+The controller does **not** blindly rewrite core rendering code. The renderer,
+metrics, tests, and experiment harness remain protected infrastructure. Source
+mutation proposals are emitted as structured hypotheses so a coding agent can
+apply one isolated change at a time and subject it to CI and regression tests.
+
+Run a short GPU research loop:
+
+```bash
+python scripts/run_autoresearch.py assets/inputs/fleur_de_lis.png \
+  --output-root outputs/autoresearch/fleur \
+  --iterations 6 \
+  --budget 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --device cuda
+```
+
+Outputs include:
+
+- `registry.jsonl`: append-only experiment history,
+- one directory per attempted configuration,
+- `research_summary.json`: Pareto frontier, final diagnoses, and recommended
+  code mutations.
+
+Current diagnostics include foreground IoU, boundary F1, symmetric boundary
+distance, edge-energy ratio, high-frequency ratio, residual connected-component
+topology, primitive-family counts, and surrogate-refinement behavior.

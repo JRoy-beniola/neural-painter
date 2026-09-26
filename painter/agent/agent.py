@@ -366,6 +366,7 @@ class NeuralPainterAgent:
                                 {
                                     "observation": observation,
                                     "progress_state": progress_state,
+                                    "task_reminder": task[:1200],
                                 },
                                 ensure_ascii=False,
                             ),
@@ -381,6 +382,8 @@ class NeuralPainterAgent:
                                 + json.dumps(observation, ensure_ascii=False)
                                 + "\nPROGRESS STATE:\n"
                                 + json.dumps(progress_state)
+                                + "\nTASK REMINDER:\n"
+                                + task[:1200]
                             ),
                         }
                     )

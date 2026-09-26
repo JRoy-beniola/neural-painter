@@ -167,7 +167,15 @@ class OpenAICompatibleModel:
                             fallback = parse_json_action(content)
                         except (TypeError, ValueError, json.JSONDecodeError):
                             fallback = None
-                        if fallback is not None and fallback.get("action") == "finish":
+                        if fallback is not None and fallback.get("action") in {
+                            "read_file",
+                            "search_code",
+                            "apply_patch",
+                            "run_ruff",
+                            "run_tests",
+                            "git_diff",
+                            "finish",
+                        }:
                             return json.dumps(fallback)
                     return json.dumps(
                         {

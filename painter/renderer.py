@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw
 
 from painter.stroke import (
     BezierRibbon,
+    ClosedBezierRegion,
     EllipsePatch,
     PolygonPatch,
     Primitive,
@@ -148,6 +149,36 @@ def _render_bezier_ribbon(
     draw.polygon(polygon, fill=(*_rgb8(ribbon.color), alpha))
 
 
+def _render_closed_bezier_region(
+    draw: ImageDraw.ImageDraw,
+    region: ClosedBezierRegion,
+    *,
+    width: int,
+    height: int,
+    samples_per_curve: int,
+) -> None:
+    points: list[tuple[float, float]] = []
+    for segment in region.segments:
+        p0, p1, p2, p3 = segment
+        for index in range(samples_per_curve):
+            t = index / (samples_per_curve - 1)
+            u = 1.0 - t
+            point = (
+                u**3 * p0[0]
+                + 3.0 * u * u * t * p1[0]
+                + 3.0 * u * t * t * p2[0]
+                + t**3 * p3[0],
+                u**3 * p0[1]
+                + 3.0 * u * u * t * p1[1]
+                + 3.0 * u * t * t * p2[1]
+                + t**3 * p3[1],
+            )
+            points.append(_to_pixel(point, width, height))
+
+    alpha = round(region.opacity * 255)
+    draw.polygon(points, fill=(*_rgb8(region.color), alpha))
+
+
 def render_primitive_overlay(
     primitive: Primitive,
     *,
@@ -186,6 +217,14 @@ def render_primitive_overlay(
         _render_polygon_patch(draw, primitive, width=width, height=height)
     elif isinstance(primitive, BezierRibbon):
         _render_bezier_ribbon(
+            draw,
+            primitive,
+            width=width,
+            height=height,
+            samples_per_curve=samples_per_curve,
+        )
+    elif isinstance(primitive, ClosedBezierRegion):
+        _render_closed_bezier_region(
             draw,
             primitive,
             width=width,

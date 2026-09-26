@@ -612,56 +612,109 @@ boundary fidelity, clutter, and runtime alongside the Pareto frontier.
 
 ## Autonomous code-mutating autoresearch
 
-`scripts/run_autoresearch_agent.py` closes the loop between diagnosis and source
-code. It requires a locally installed and authenticated Codex CLI and performs
-each mutation in an isolated git worktree.
+Neural Painter now contains its **own constrained research coding agent**. It does
+not depend on Codex, OpenHands, SWE-agent, Aider, or another external coding-agent
+runtime.
 
-For every mutation cycle it:
+The repository owns:
 
-1. runs the normal autoresearch controller to establish the current frontier,
-2. takes the highest-priority code mutation proposed by the controller,
-3. invokes Codex non-interactively on exactly that bounded hypothesis,
-4. independently runs `ruff check .` and `pytest -q`,
-5. reruns the full autoresearch benchmark,
-6. compares reconstruction, SSIM, boundary fidelity, clutter, and runtime,
-7. commits the mutation only when the measured acceptance gate passes,
-8. otherwise hard-resets the worktree and records the rejection,
-9. repeats from the newly accepted codebase.
+- the agent loop,
+- the tool policy,
+- the research constitution,
+- patch validation,
+- scientific memory,
+- quality gates,
+- benchmark acceptance/rejection,
+- git worktree isolation.
 
-The source checkout is never modified while candidate code is being evaluated.
-Accepted mutations accumulate on an `autoresearch/<timestamp>` branch. Use
-`--apply` only when you want the harness to fast-forward your current branch
-to the accepted autonomous branch after all mutation cycles finish.
+Only the language model is swappable. The agent talks to any
+OpenAI-compatible `/v1/chat/completions` endpoint, which makes it usable with
+local/open model servers such as Ollama, LM Studio, vLLM, or llama.cpp-compatible
+servers.
 
-The source repository must be clean before starting.
+The agent is deliberately not given an unrestricted shell. Its action space is:
 
-```bash
-python scripts/run_autoresearch_agent.py assets/inputs/fleur_de_lis.png \
-  --output-root outputs/autocode/fleur_v1 \
-  --mutation-cycles 3 \
-  --experiment-iterations 6 \
-  --budget 2000 \
-  --palette-size 8 \
-  --seed 0 \
-  --device cuda
+```text
+read_file
+search_code
+apply_patch
+run_ruff
+run_tests
+git_diff
+finish
 ```
 
-After inspecting `outputs/autocode/fleur_v1/autocode_summary.json`, rerun with
-`--apply` if you want accepted mutations fast-forwarded automatically:
+Patch paths are validated. Core evaluator/controller infrastructure is protected
+from autonomous edits, including the renderer, metrics, diagnostics, research
+controller, and autonomous harness. Project-specific scientific rules live in
+`.agent/RESEARCH_RULES.md`.
+
+For every mutation cycle the outer harness:
+
+1. runs normal autoresearch to establish the current evidence and frontier,
+2. selects one bounded mutation hypothesis,
+3. supplies the hypothesis, current metrics, diagnoses, and recent research
+   memory to `NeuralPainterAgent`,
+4. lets the configured model inspect the repository and produce patches only
+   through the constrained tools,
+5. independently runs `ruff check .` and the full `pytest -q`,
+6. reruns the GPU autoresearch benchmark,
+7. accepts the mutation only if the scientific acceptance gate passes,
+8. commits accepted mutations on an isolated `autoresearch/<timestamp>` branch,
+9. hard-reverts rejected mutations,
+10. records the result in `research_memory.jsonl` so rejected hypotheses remain
+    part of future context.
+
+### Local model example
+
+For an OpenAI-compatible Ollama endpoint, start Ollama with the coding model you
+want available, then run:
 
 ```bash
 python scripts/run_autoresearch_agent.py assets/inputs/fleur_de_lis.png \
-  --output-root outputs/autocode/fleur_apply \
+  --output-root outputs/autocode/fleur_native_v1 \
   --mutation-cycles 3 \
   --experiment-iterations 6 \
   --budget 2000 \
   --palette-size 8 \
   --seed 0 \
   --device cuda \
-  --apply
+  --model-base-url http://localhost:11434/v1 \
+  --model qwen2.5-coder:7b
 ```
 
-Set `NEURAL_PAINTER_CODEX` if the Codex executable is not named `codex`.
-The harness invokes Codex with structured JSONL output and full-auto filesystem
-editing inside the disposable worktree; independent test and benchmark gates
-remain outside the agent's control.
+The defaults can also be set with:
+
+```bash
+export NEURAL_PAINTER_MODEL_BASE_URL=http://localhost:11434/v1
+export NEURAL_PAINTER_MODEL=qwen2.5-coder:7b
+export NEURAL_PAINTER_MODEL_API_KEY=
+```
+
+The model is replaceable without changing the agent. A stronger local or hosted
+open-weight model can use the same protocol.
+
+Outputs include:
+
+```text
+outputs/autocode/<run>/
+  baseline/
+  mutation_00/
+    prompt.txt
+    agent_transcript.jsonl
+    quality_gates.json
+    benchmark/
+    comparison.json
+  mutation_01/
+  ...
+  research_memory.jsonl
+  autocode_summary.json
+```
+
+By default the accepted mutations remain on the generated autoresearch branch.
+Use `--apply` only when you want the harness to fast-forward your current branch
+to the accepted autonomous branch after all mutation cycles complete.
+
+This is intentionally closer to a small project-specific SWE-style research
+agent than a general coding assistant: its context, action space, memory, and
+scientific decision rule are all constrained to Neural Painter.

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Self
+from urllib.request import Request
 
 import pytest
 
@@ -79,7 +82,7 @@ def test_openai_compatible_model_requests_json_mode(monkeypatch: pytest.MonkeyPa
     captured: dict[str, object] = {}
 
     class _Response:
-        def __enter__(self) -> "_Response":
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *args: object) -> None:
@@ -90,9 +93,10 @@ def test_openai_compatible_model_requests_json_mode(monkeypatch: pytest.MonkeyPa
                 {"choices": [{"message": {"content": "{\\\"action\\\":\\\"finish\\\"}"}}]}
             ).encode("utf-8")
 
-    def fake_urlopen(request: object, timeout: int) -> _Response:
+    def fake_urlopen(request: Request, timeout: int) -> _Response:
         del timeout
-        data = getattr(request, "data")
+        data = request.data
+        assert data is not None
         captured.update(json.loads(data.decode("utf-8")))
         return _Response()
 

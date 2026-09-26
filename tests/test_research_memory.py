@@ -9,6 +9,7 @@ import pytest
 from painter.agent.agent import NeuralPainterAgent
 from painter.agent.memory import ResearchMemory
 from painter.agent.protocol import ExperimentProtocol, evaluate_prediction
+from painter.agent.tools import ProjectTools
 
 
 class _FakeModel:
@@ -136,3 +137,17 @@ def test_protocol_rejects_unknown_primary_metric() -> None:
 
     with pytest.raises(ValueError, match="unsupported primary metric"):
         protocol.validate()
+
+
+def test_agent_cannot_patch_its_own_scientific_infrastructure(tmp_path) -> None:
+    tools = ProjectTools(tmp_path)
+    patch = """diff --git a/painter/agent/protocol.py b/painter/agent/protocol.py
+--- a/painter/agent/protocol.py
++++ b/painter/agent/protocol.py
+@@ -1 +1 @@
+-old
++new
+"""
+
+    with pytest.raises(ValueError, match="protected file"):
+        tools.apply_patch(patch)

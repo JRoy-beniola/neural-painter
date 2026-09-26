@@ -38,6 +38,8 @@ class RefinementStats:
     accepted_by_raster: bool | None = None
     raster_mse_before: float | None = None
     raster_mse_after: float | None = None
+    raster_checkpoints: int = 0
+    best_raster_step: int | None = None
 
 
 def _stroke_center(stroke: Stroke) -> tuple[float, float]:

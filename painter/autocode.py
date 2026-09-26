@@ -17,7 +17,6 @@ from typing import Any
 
 from painter.agent import NeuralPainterAgent, OpenAICompatibleModel
 
-
 @dataclass(frozen=True, slots=True)
 class AcceptanceDecision:
     accepted: bool
@@ -347,7 +346,7 @@ def autonomous_research(
             )
             try:
                 agent_result = agent.run(prompt, log_dir=cycle_dir)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 _git(worktree, "reset", "--hard", "HEAD")
                 _git(worktree, "clean", "-fd")
                 remember(

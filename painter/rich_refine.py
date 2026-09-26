@@ -18,8 +18,8 @@ from painter.refine import (
     _validate_refinement_args,
 )
 from painter.renderer import render_primitive_overlay, render_strokes
-from painter.rich import paint_region_rich_residual
-from painter.stroke import EllipsePatch, Primitive, TaperedStroke
+from painter.rich import paint_polygon_rich_residual, paint_region_rich_residual
+from painter.stroke import EllipsePatch, PolygonPatch, Primitive, TaperedStroke
 
 
 def _raster_segment_affine(
@@ -110,6 +110,9 @@ def refine_region_rich_primitives_ordered(
         if initial_background is None:
             raise ValueError("initial_background is required with initial_primitives")
         background = initial_background
+    fixed_regions = [
+        primitive for primitive in primitives if isinstance(primitive, PolygonPatch)
+    ]
     patches = [primitive for primitive in primitives if isinstance(primitive, EllipsePatch)]
     tapered = [primitive for primitive in primitives if isinstance(primitive, TaperedStroke)]
 
@@ -124,7 +127,20 @@ def refine_region_rich_primitives_ordered(
 
     base_rgb = np.empty_like(target_small, dtype=np.float32)
     base_rgb[...] = np.asarray(background, dtype=np.float32) / 255.0
-    background_tensor = torch.tensor(base_rgb, dtype=dtype, device=torch_device)
+    if fixed_regions:
+        fixed_region_image = render_strokes(
+            fixed_regions,
+            size=size,
+            background=background,
+        )
+        fixed_region_rgb = np.asarray(fixed_region_image, dtype=np.float32) / 255.0
+        background_tensor = torch.tensor(
+            fixed_region_rgb,
+            dtype=dtype,
+            device=torch_device,
+        )
+    else:
+        background_tensor = torch.tensor(base_rgb, dtype=dtype, device=torch_device)
 
     first_loss: float | None = None
     final_loss = 0.0
@@ -272,7 +288,7 @@ def refine_region_rich_primitives_ordered(
         selected = [tapered[index] for index in selected_indices]
 
         base_image = render_strokes(
-            refined_patches,
+            [*fixed_regions, *refined_patches],
             size=size,
             background=background,
         )
@@ -433,7 +449,7 @@ def refine_region_rich_primitives_ordered(
         geometry_bound=geometry_bound,
         continuous_color=True,
     )
-    return [*refined_patches, *refined_tapered], background, stats
+    return [*fixed_regions, *refined_patches, *refined_tapered], background, stats
 
 
 
@@ -511,3 +527,43 @@ def refine_region_rich_primitives_scheduled(
         sweeps=1,
     )
     return second, background, stats
+
+
+
+def refine_polygon_rich_primitives_ordered(
+    image_rgb: np.ndarray,
+    palette: np.ndarray,
+    total_primitives: int,
+    *,
+    seed: int = 0,
+    steps: int = 40,
+    lr: float = 0.01,
+    max_refine_strokes: int = 256,
+    optimization_resolution: int = 96,
+    device: str = "auto",
+    objective: str = "contour",
+    geometry_bound: float = 0.02,
+) -> tuple[list[Primitive], tuple[int, int, int], RefinementStats]:
+    """Refine tapered detail strokes over fixed contour-fitted polygon regions."""
+    primitives, background = paint_polygon_rich_residual(
+        image_rgb,
+        palette,
+        total_primitives,
+        seed=seed,
+    )
+    return refine_region_rich_primitives_ordered(
+        image_rgb,
+        palette,
+        total_primitives,
+        seed=seed,
+        steps=steps,
+        lr=lr,
+        max_refine_strokes=max_refine_strokes,
+        optimization_resolution=optimization_resolution,
+        device=device,
+        objective=objective,
+        geometry_bound=geometry_bound,
+        optimize_geometry=True,
+        initial_primitives=primitives,
+        initial_background=background,
+    )

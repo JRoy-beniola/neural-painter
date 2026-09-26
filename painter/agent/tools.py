@@ -7,7 +7,6 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-
 ALLOWED_PREFIXES = ("painter/", "scripts/", "tests/")
 ALLOWED_ROOT_FILES = {"README.md", "pyproject.toml"}
 PROTECTED_PATHS = {

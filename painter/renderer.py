@@ -7,7 +7,7 @@ from collections.abc import Iterable
 
 from PIL import Image, ImageDraw
 
-from painter.stroke import EllipsePatch, PolygonPatch, Primitive, Stroke, TaperedStroke
+from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Primitive, Stroke, TaperedStroke
 
 
 def _to_pixel(point: tuple[float, float], width: int, height: int) -> tuple[float, float]:
@@ -110,6 +110,37 @@ def _render_polygon_patch(
     draw.polygon(points, fill=(*_rgb8(patch.color), alpha))
 
 
+def _render_bezier_ribbon(
+    draw: ImageDraw.ImageDraw,
+    ribbon: BezierRibbon,
+    *,
+    width: int,
+    height: int,
+    samples_per_curve: int,
+) -> None:
+    scale = min(width, height)
+    left: list[tuple[float, float]] = []
+    right: list[tuple[float, float]] = []
+
+    for index in range(samples_per_curve):
+        t = index / (samples_per_curve - 1)
+        cx, cy = _to_pixel(ribbon.point_at(t), width, height)
+        tx, ty = ribbon.tangent_at(t)
+        norm = math.hypot(tx * (width - 1), ty * (height - 1))
+        if norm < 1e-8:
+            nx, ny = 0.0, 1.0
+        else:
+            nx = -(ty * (height - 1)) / norm
+            ny = (tx * (width - 1)) / norm
+        half_width = 0.5 * ribbon.width_at(t) * scale
+        left.append((cx + nx * half_width, cy + ny * half_width))
+        right.append((cx - nx * half_width, cy - ny * half_width))
+
+    polygon = [*left, *reversed(right)]
+    alpha = round(ribbon.opacity * 255)
+    draw.polygon(polygon, fill=(*_rgb8(ribbon.color), alpha))
+
+
 def render_primitive_overlay(
     primitive: Primitive,
     *,
@@ -146,6 +177,14 @@ def render_primitive_overlay(
         _render_patch(draw, primitive, width=width, height=height)
     elif isinstance(primitive, PolygonPatch):
         _render_polygon_patch(draw, primitive, width=width, height=height)
+    elif isinstance(primitive, BezierRibbon):
+        _render_bezier_ribbon(
+            draw,
+            primitive,
+            width=width,
+            height=height,
+            samples_per_curve=samples_per_curve,
+        )
     else:
         raise TypeError(f"unsupported primitive type: {type(primitive)!r}")
 

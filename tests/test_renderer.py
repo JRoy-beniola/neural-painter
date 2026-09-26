@@ -9,7 +9,14 @@ from painter.calibration import (
     rich_renderer_consistency,
 )
 from painter.renderer import render_strokes
-from painter.stroke import BezierRibbon, EllipsePatch, PolygonPatch, Stroke, TaperedStroke
+from painter.stroke import (
+    BezierRibbon,
+    ClosedBezierRegion,
+    EllipsePatch,
+    PolygonPatch,
+    Stroke,
+    TaperedStroke,
+)
 
 
 def horizontal_stroke(**overrides: object) -> Stroke:
@@ -149,4 +156,20 @@ def test_renderer_supports_bezier_ribbon() -> None:
     )
     image = render_strokes([ribbon], size=(96, 96), background=(0, 0, 0))
     assert image.getbbox() is not None
+    assert image.getpixel((48, 48)) != (0, 0, 0)
+
+
+
+def test_renderer_supports_closed_bezier_region() -> None:
+    region = ClosedBezierRegion(
+        segments=(
+            ((0.2, 0.2), (0.4, 0.1), (0.6, 0.1), (0.8, 0.2)),
+            ((0.8, 0.2), (0.9, 0.4), (0.9, 0.6), (0.8, 0.8)),
+            ((0.8, 0.8), (0.6, 0.9), (0.4, 0.9), (0.2, 0.8)),
+            ((0.2, 0.8), (0.1, 0.6), (0.1, 0.4), (0.2, 0.2)),
+        ),
+        color=(0.2, 0.5, 0.8),
+        opacity=1.0,
+    )
+    image = render_strokes([region], size=(96, 96), background=(0, 0, 0))
     assert image.getpixel((48, 48)) != (0, 0, 0)

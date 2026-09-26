@@ -358,6 +358,9 @@ def test_adaptive_rich_residual_writes_primitive_diagnostics(tmp_path) -> None:
     assert run["stroke_count"] == 8
     assert sum(run["primitive_counts"].values()) == 8
     assert "largest_residual_component_fraction" in run["diagnostics"]
+    assert "largest_residual_component_energy_share" in run["diagnostics"]
+    assert "residual_pixel_fraction" in run["diagnostics"]
+    assert "high_frequency_boundary_ratio" in run["diagnostics"]
 
 
 def test_rich_refinement_records_real_raster_acceptance(tmp_path) -> None:

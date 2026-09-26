@@ -115,6 +115,7 @@ def refine_region_rich_primitives_ordered(
         if initial_background is None:
             raise ValueError("initial_background is required with initial_primitives")
         background = initial_background
+    initial_program = list(primitives)
     fixed_regions = [
         primitive
         for primitive in primitives
@@ -280,7 +281,7 @@ def refine_region_rich_primitives_ordered(
     refined_tapered = list(tapered)
     if tapered:
         current_full = render_strokes(
-            [*refined_patches, *tapered],
+            [*fixed_regions, *refined_patches, *tapered],
             size=(image_rgb.shape[1], image_rgb.shape[0]),
             background=background,
         )
@@ -452,6 +453,29 @@ def refine_region_rich_primitives_ordered(
             )
         refined_count += len(selected_indices)
 
+    candidate_program: list[Primitive] = [
+        *fixed_regions,
+        *refined_patches,
+        *refined_tapered,
+    ]
+    full_size = (image_rgb.shape[1], image_rgb.shape[0])
+    before_image = render_strokes(
+        initial_program,
+        size=full_size,
+        background=background,
+    )
+    after_image = render_strokes(
+        candidate_program,
+        size=full_size,
+        background=background,
+    )
+    before_rgb = np.asarray(before_image, dtype=np.float32) / 255.0
+    after_rgb = np.asarray(after_image, dtype=np.float32) / 255.0
+    raster_mse_before = float(np.mean((image_rgb - before_rgb) ** 2))
+    raster_mse_after = float(np.mean((image_rgb - after_rgb) ** 2))
+    accepted_by_raster = raster_mse_after < raster_mse_before
+    final_program = candidate_program if accepted_by_raster else initial_program
+
     stats = RefinementStats(
         refined_strokes=refined_count,
         steps=steps * (2 if patches and tapered else 1),
@@ -462,8 +486,11 @@ def refine_region_rich_primitives_ordered(
         optimize_geometry=optimize_geometry,
         geometry_bound=geometry_bound,
         continuous_color=True,
+        accepted_by_raster=accepted_by_raster,
+        raster_mse_before=raster_mse_before,
+        raster_mse_after=raster_mse_after,
     )
-    return [*fixed_regions, *refined_patches, *refined_tapered], background, stats
+    return final_program, background, stats
 
 
 

@@ -253,4 +253,34 @@ class BezierRibbon:
         return (1.0 - local) * self.width_mid + local * self.width_end
 
 
-Primitive: TypeAlias = Stroke | TaperedStroke | EllipsePatch | PolygonPatch | BezierRibbon
+@dataclass(frozen=True, slots=True)
+class ClosedBezierRegion:
+    """Filled smooth closed region built from cubic Bezier boundary segments."""
+
+    segments: tuple[tuple[Point, Point, Point, Point], ...]
+    color: RGB
+    opacity: float = 1.0
+
+    def __post_init__(self) -> None:
+        if len(self.segments) < 2:
+            raise ValueError("segments must contain at least two cubic segments")
+        if len(self.segments) > 24:
+            raise ValueError("segments must contain at most 24 cubic segments")
+        for segment_index, segment in enumerate(self.segments):
+            if len(segment) != 4:
+                raise ValueError("each segment must contain exactly four points")
+            for point_index, point in enumerate(segment):
+                _validate_point(
+                    point,
+                    f"segments[{segment_index}][{point_index}]",
+                )
+        for index in range(len(self.segments)):
+            end = self.segments[index][3]
+            start = self.segments[(index + 1) % len(self.segments)][0]
+            if abs(end[0] - start[0]) > 1e-6 or abs(end[1] - start[1]) > 1e-6:
+                raise ValueError("Bezier region segments must form a closed chain")
+        _validate_rgb(self.color)
+        _validate_unit_interval(self.opacity, "opacity")
+
+
+Primitive: TypeAlias = Stroke | TaperedStroke | EllipsePatch | PolygonPatch | BezierRibbon | ClosedBezierRegion

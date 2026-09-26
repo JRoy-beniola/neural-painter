@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from painter.stroke import EllipsePatch, Stroke, TaperedStroke
+from painter.stroke import EllipsePatch, PolygonPatch, Stroke, TaperedStroke
 
 
 def make_stroke(**overrides: object) -> Stroke:
@@ -129,4 +129,19 @@ def test_ellipse_patch_validates_bounds() -> None:
             radius_y=0.05,
             angle=0.0,
             color=(0.2, 0.4, 0.6),
+        )
+
+
+def test_polygon_patch_validates_vertices() -> None:
+    patch = PolygonPatch(
+        vertices=((0.2, 0.2), (0.8, 0.2), (0.5, 0.8)),
+        color=(0.2, 0.4, 0.7),
+        opacity=0.8,
+    )
+    assert len(patch.vertices) == 3
+
+    with pytest.raises(ValueError):
+        PolygonPatch(
+            vertices=((0.2, 0.2), (0.8, 0.2)),
+            color=(0.2, 0.4, 0.7),
         )

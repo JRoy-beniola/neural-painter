@@ -255,7 +255,7 @@ class NeuralPainterAgent:
             if rules_path.is_file()
             else "No additional project rules file was found."
         )
-        messages: list[dict[str, str]] = [
+        messages: list[dict[str, Any]] = [
             {
                 "role": "system",
                 "content": SYSTEM_PROMPT + "\n\nPROJECT RESEARCH RULES:\n" + project_rules,
@@ -277,8 +277,10 @@ class NeuralPainterAgent:
                 )
                 transcript.flush()
 
+                tool_call_id: str | None = None
                 try:
                     action = parse_json_action(raw)
+                    tool_call_id = action.pop("_tool_call_id", None)
                     name = action.get("action")
                     inspection_key = (
                         json.dumps(action, sort_keys=True, separators=(",", ":"))
@@ -327,24 +329,62 @@ class NeuralPainterAgent:
                         transcript_path=transcript_path,
                     )
 
-                messages.append({"role": "assistant", "content": raw})
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "TOOL OBSERVATION:\n"
-                            + json.dumps(observation, ensure_ascii=False)
-                            + "\nPROGRESS STATE:\n"
-                            + json.dumps(
-                                {
-                                    "source_changed": source_changed,
-                                    "unique_inspections_since_change": len(inspection_keys),
-                                    "turns_remaining": self.max_turns - turn,
-                                }
-                            )
-                        ),
+                progress_state = {
+                    "source_changed": source_changed,
+                    "unique_inspections_since_change": len(inspection_keys),
+                    "turns_remaining": self.max_turns - turn,
+                }
+                if tool_call_id is not None and action.get("action") != "invalid":
+                    arguments = {
+                        key: value
+                        for key, value in action.items()
+                        if key != "action"
                     }
-                )
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": str(tool_call_id),
+                                    "type": "function",
+                                    "function": {
+                                        "name": str(action["action"]),
+                                        "arguments": json.dumps(
+                                            arguments,
+                                            ensure_ascii=False,
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": str(tool_call_id),
+                            "content": json.dumps(
+                                {
+                                    "observation": observation,
+                                    "progress_state": progress_state,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    )
+                else:
+                    messages.append({"role": "assistant", "content": raw})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "TOOL OBSERVATION:\n"
+                                + json.dumps(observation, ensure_ascii=False)
+                                + "\nPROGRESS STATE:\n"
+                                + json.dumps(progress_state)
+                            ),
+                        }
+                    )
 
         return AgentResult(
             success=False,

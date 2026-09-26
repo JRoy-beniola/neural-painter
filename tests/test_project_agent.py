@@ -254,6 +254,7 @@ def test_openai_compatible_model_uses_native_tool_calls_for_coding(
                                 "content": "",
                                 "tool_calls": [
                                     {
+                                        "id": "call_123",
                                         "type": "function",
                                         "function": {
                                             "name": "search_code",
@@ -285,7 +286,67 @@ def test_openai_compatible_model_uses_native_tool_calls_for_coding(
     assert json.loads(result) == {
         "action": "search_code",
         "query": "adaptive_allocator",
+        "_tool_call_id": "call_123",
     }
     assert "tools" in captured
     assert captured["tool_choice"] == "required"
     assert "response_format" not in captured
+
+
+def test_agent_replays_native_tool_history(tmp_path: Path) -> None:
+    (tmp_path / "painter").mkdir()
+    (tmp_path / "painter" / "demo.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".agent").mkdir()
+    (tmp_path / ".agent" / "RESEARCH_RULES.md").write_text(
+        "Implement one mutation at a time.\n",
+        encoding="utf-8",
+    )
+
+    class NativeHistoryModel:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.second_messages: list[dict[str, object]] | None = None
+
+        def complete(
+            self,
+            messages: list[dict[str, object]],
+            **kwargs: object,
+        ) -> str:
+            del kwargs
+            self.calls += 1
+            if self.calls == 1:
+                return json.dumps(
+                    {
+                        "action": "read_file",
+                        "path": "painter/demo.py",
+                        "start_line": 1,
+                        "end_line": 1,
+                        "_tool_call_id": "call_read",
+                    }
+                )
+            self.second_messages = list(messages)
+            return json.dumps(
+                {
+                    "action": "finish",
+                    "summary": "done",
+                    "_tool_call_id": "call_finish",
+                }
+            )
+
+    model = NativeHistoryModel()
+    agent = NeuralPainterAgent(model, tmp_path, max_turns=2)
+    result = agent.run("Inspect demo.py.", log_dir=tmp_path / "logs")
+
+    assert result.success
+    assert model.second_messages is not None
+    assistant_message = model.second_messages[-2]
+    tool_message = model.second_messages[-1]
+    assert assistant_message["role"] == "assistant"
+    assert assistant_message["tool_calls"][0]["id"] == "call_read"
+    assert tool_message["role"] == "tool"
+    assert tool_message["tool_call_id"] == "call_read"
+    tool_payload = json.loads(str(tool_message["content"]))
+    assert tool_payload["observation"]["ok"] is True

@@ -102,7 +102,7 @@ class OpenAICompatibleModel:
 
     def complete(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         response_format: dict[str, Any] | None = None,
     ) -> str:
@@ -158,7 +158,14 @@ class OpenAICompatibleModel:
                     arguments = json.loads(arguments)
                 if not isinstance(arguments, dict):
                     raise TypeError("tool-call arguments must be an object")
-                return json.dumps({"action": name, **arguments})
+                call_id = str(tool_calls[0].get("id") or f"call_{name}")
+                return json.dumps(
+                    {
+                        "action": name,
+                        **arguments,
+                        "_tool_call_id": call_id,
+                    }
+                )
 
             content = str(message["content"])
             if not content.strip():

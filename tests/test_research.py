@@ -228,7 +228,10 @@ def test_autoresearch_bootstraps_with_adaptive_allocator(tmp_path) -> None:
     )
 
     assert summary["champion"] is not None
-    assert summary["champion"]["candidate"]["method"] == "adaptive_rich_residual"
+    assert (
+        summary["champion"]["candidate"]["method"]
+        == "adaptive_closed_region_residual"
+    )
     assert "champion_diagnoses" in summary
     assert "persistent_frontier_diagnoses" in summary
 

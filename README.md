@@ -536,3 +536,51 @@ Outputs include:
 Current diagnostics include foreground IoU, boundary F1, symmetric boundary
 distance, edge-energy ratio, high-frequency ratio, residual connected-component
 topology, primitive-family counts, and surrogate-refinement behavior.
+
+
+### Frontier-aware autoresearch
+
+The autoresearch controller now reasons from the **Pareto frontier**, not merely
+the most recently attempted run.
+
+It records separately:
+
+- the current champion,
+- diagnoses on the champion,
+- failure modes persistent across the frontier,
+- diagnoses from each individual attempted run.
+
+Candidate selection for the next iteration is driven by the champion +
+persistent-frontier evidence.
+
+The painter also has an `adaptive_rich_residual` policy. It estimates connected
+residual topology from the input/background pair and adapts the budget split
+between:
+
+- Bezier ribbons for elongated coherent regions,
+- polygon patches for compact broad regions,
+- tapered strokes for remaining detail.
+
+Rich differentiable refinement is additionally guarded by the real Pillow
+renderer. After optimization, the candidate program is rendered with the actual
+rasterizer and compared with the pre-refinement program. If full-resolution
+raster MSE did not improve, the optimized program is rejected and the original
+program is returned. The refinement metadata records:
+
+```text
+accepted_by_raster
+raster_mse_before
+raster_mse_after
+```
+
+Run a new research cycle in a fresh output directory:
+
+```bash
+python scripts/run_autoresearch.py assets/inputs/fleur_de_lis.png \
+  --output-root outputs/autoresearch/fleur_frontier_v2 \
+  --iterations 8 \
+  --budget 2000 \
+  --palette-size 8 \
+  --seed 0 \
+  --device cuda
+```

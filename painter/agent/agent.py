@@ -66,8 +66,17 @@ class NeuralPainterAgent:
     def run(self, task: str, *, log_dir: Path) -> AgentResult:
         log_dir.mkdir(parents=True, exist_ok=True)
         transcript_path = log_dir / "agent_transcript.jsonl"
+        rules_path = self.tools.root / ".agent" / "RESEARCH_RULES.md"
+        project_rules = (
+            rules_path.read_text(encoding="utf-8")
+            if rules_path.is_file()
+            else "No additional project rules file was found."
+        )
         messages: list[dict[str, str]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT + "\n\nPROJECT RESEARCH RULES:\n" + project_rules,
+            },
             {"role": "user", "content": task},
         ]
 

@@ -57,11 +57,13 @@ def build_agent_prompt(
     mutation: dict[str, str],
     *,
     baseline_summary: dict[str, Any],
+    research_history: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build a tightly scoped research-engineering prompt for the coding agent."""
     champion = baseline_summary.get("champion") or {}
     metrics = champion.get("metrics") or {}
     diagnoses = baseline_summary.get("final_diagnoses") or []
+    history = (research_history or [])[-8:]
 
     return f"""You are modifying the Neural Painter research repository in an isolated git worktree.
 
@@ -86,6 +88,9 @@ high_frequency_ratio={metrics.get("diagnostics", {}).get("high_frequency_ratio")
 
 ACTIVE DIAGNOSES:
 {json.dumps(diagnoses, indent=2)}
+
+RECENT RESEARCH MEMORY:
+{json.dumps(history, indent=2)}
 
 Constraints:
 - Keep existing public experiment methods working.
@@ -238,6 +243,12 @@ def run_autoresearch_command(
     return json.loads(summary_path.read_text(encoding="utf-8"))
 
 
+def _append_memory(path: Path, entry: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
 def _git(worktree: Path, *args: str) -> subprocess.CompletedProcess[str]:
     result = _run(["git", *args], cwd=worktree)
     if result.returncode != 0:
@@ -285,6 +296,12 @@ def autonomous_research(
         raise RuntimeError(create.stderr.strip() or "failed to create autoresearch worktree")
 
     history: list[dict[str, Any]] = []
+    memory_path = output_root / "research_memory.jsonl"
+
+    def remember(entry: dict[str, Any]) -> None:
+        history.append(entry)
+        _append_memory(memory_path, entry)
+
     try:
         baseline_root = output_root / "baseline"
         baseline = run_autoresearch_command(
@@ -302,14 +319,18 @@ def autonomous_research(
         for cycle in range(mutation_cycles):
             mutations = baseline.get("recommended_code_mutations") or []
             if not mutations:
-                history.append(
+                remember(
                     {"cycle": cycle, "status": "stopped", "reason": "no mutation proposed"}
                 )
                 break
 
             mutation = mutations[0]
             cycle_dir = output_root / f"mutation_{cycle:02d}"
-            prompt = build_agent_prompt(mutation, baseline_summary=baseline)
+            prompt = build_agent_prompt(
+                mutation,
+                baseline_summary=baseline,
+                research_history=history,
+            )
             (cycle_dir / "prompt.txt").parent.mkdir(parents=True, exist_ok=True)
             (cycle_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
 
@@ -329,7 +350,7 @@ def autonomous_research(
             except Exception as exc:
                 _git(worktree, "reset", "--hard", "HEAD")
                 _git(worktree, "clean", "-fd")
-                history.append(
+                remember(
                     {
                         "cycle": cycle,
                         "status": "rejected",
@@ -342,7 +363,7 @@ def autonomous_research(
             if not agent_result.success:
                 _git(worktree, "reset", "--hard", "HEAD")
                 _git(worktree, "clean", "-fd")
-                history.append(
+                remember(
                     {
                         "cycle": cycle,
                         "status": "rejected",
@@ -355,7 +376,7 @@ def autonomous_research(
 
             status = _git(worktree, "status", "--porcelain").stdout.strip()
             if not status:
-                history.append(
+                remember(
                     {
                         "cycle": cycle,
                         "status": "rejected",
@@ -376,7 +397,7 @@ def autonomous_research(
             if not gates_ok:
                 _git(worktree, "reset", "--hard", "HEAD")
                 _git(worktree, "clean", "-fd")
-                history.append(
+                remember(
                     {
                         "cycle": cycle,
                         "status": "rejected",
@@ -419,7 +440,7 @@ def autonomous_research(
                     f"autoresearch: mutation {cycle + 1}",
                 )
                 baseline = candidate
-                history.append(
+                remember(
                     {
                         "cycle": cycle,
                         "status": "accepted",
@@ -432,7 +453,7 @@ def autonomous_research(
             else:
                 _git(worktree, "reset", "--hard", "HEAD")
                 _git(worktree, "clean", "-fd")
-                history.append(
+                remember(
                     {
                         "cycle": cycle,
                         "status": "rejected",

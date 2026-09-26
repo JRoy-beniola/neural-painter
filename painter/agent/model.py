@@ -106,25 +106,30 @@ class OpenAICompatibleModel:
         *,
         response_format: dict[str, Any] | None = None,
     ) -> str:
-        endpoint = self.base_url.rstrip("/") + "/chat/completions"
         coding_turn = (
             isinstance(response_format, dict)
             and isinstance(response_format.get("json_schema"), dict)
             and response_format["json_schema"].get("name") == "coding_action"
         )
-        request_payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0.0,
-            "stream": False,
-            "reasoning_effort": "none",
-        }
         if coding_turn:
-            request_payload["tools"] = CODING_TOOLS
-            request_payload["tool_choice"] = "required"
+            endpoint = self.base_url.removesuffix("/v1").rstrip("/") + "/api/chat"
+            request_payload: dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.0,
+                "stream": False,
+                "think": False,
+                "tools": CODING_TOOLS,
+            }
         else:
-            request_payload["response_format"] = response_format or {
-                "type": "json_object"
+            endpoint = self.base_url.rstrip("/") + "/chat/completions"
+            request_payload = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.0,
+                "stream": False,
+                "reasoning_effort": "none",
+                "response_format": response_format or {"type": "json_object"},
             }
         payload = json.dumps(request_payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
@@ -146,11 +151,15 @@ class OpenAICompatibleModel:
             ) from exc
 
         try:
-            message = body["choices"][0]["message"]
             if coding_turn:
+                message = body["message"]
                 tool_calls = message.get("tool_calls") or []
                 if not tool_calls:
-                    raise RuntimeError("model endpoint returned no coding tool call")
+                    content = str(message.get("content", "")).strip()
+                    raise RuntimeError(
+                        "model endpoint returned no coding tool call"
+                        + (f": {content}" if content else "")
+                    )
                 function = tool_calls[0]["function"]
                 name = str(function["name"])
                 arguments = function.get("arguments", {})
@@ -158,15 +167,15 @@ class OpenAICompatibleModel:
                     arguments = json.loads(arguments)
                 if not isinstance(arguments, dict):
                     raise TypeError("tool-call arguments must be an object")
-                call_id = str(tool_calls[0].get("id") or f"call_{name}")
                 return json.dumps(
                     {
                         "action": name,
                         **arguments,
-                        "_tool_call_id": call_id,
+                        "_tool_name": name,
                     }
                 )
 
+            message = body["choices"][0]["message"]
             content = str(message["content"])
             if not content.strip():
                 raise RuntimeError("model endpoint returned empty assistant content")

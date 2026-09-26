@@ -277,10 +277,10 @@ class NeuralPainterAgent:
                 )
                 transcript.flush()
 
-                tool_call_id: str | None = None
+                tool_name: str | None = None
                 try:
                     action = parse_json_action(raw)
-                    tool_call_id = action.pop("_tool_call_id", None)
+                    tool_name = action.pop("_tool_name", None)
                     name = action.get("action")
                     inspection_key = (
                         json.dumps(action, sort_keys=True, separators=(",", ":"))
@@ -334,7 +334,7 @@ class NeuralPainterAgent:
                     "unique_inspections_since_change": len(inspection_keys),
                     "turns_remaining": self.max_turns - turn,
                 }
-                if tool_call_id is not None and action.get("action") != "invalid":
+                if tool_name is not None and action.get("action") != "invalid":
                     arguments = {
                         key: value
                         for key, value in action.items()
@@ -346,14 +346,10 @@ class NeuralPainterAgent:
                             "content": "",
                             "tool_calls": [
                                 {
-                                    "id": str(tool_call_id),
                                     "type": "function",
                                     "function": {
                                         "name": str(action["action"]),
-                                        "arguments": json.dumps(
-                                            arguments,
-                                            ensure_ascii=False,
-                                        ),
+                                        "arguments": arguments,
                                     },
                                 }
                             ],
@@ -362,7 +358,7 @@ class NeuralPainterAgent:
                     messages.append(
                         {
                             "role": "tool",
-                            "tool_call_id": str(tool_call_id),
+                            "tool_name": str(tool_name),
                             "content": json.dumps(
                                 {
                                     "observation": observation,

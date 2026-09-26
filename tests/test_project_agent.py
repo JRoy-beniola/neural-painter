@@ -247,24 +247,19 @@ def test_openai_compatible_model_uses_native_tool_calls_for_coding(
         def read(self) -> bytes:
             return json.dumps(
                 {
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "content": "",
-                                "tool_calls": [
-                                    {
-                                        "id": "call_123",
-                                        "type": "function",
-                                        "function": {
-                                            "name": "search_code",
-                                            "arguments": {"query": "adaptive_allocator"},
-                                        },
-                                    }
-                                ],
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "search_code",
+                                    "arguments": {"query": "adaptive_allocator"},
+                                },
                             }
-                        }
-                    ]
+                        ],
+                    }
                 }
             ).encode("utf-8")
 
@@ -286,10 +281,10 @@ def test_openai_compatible_model_uses_native_tool_calls_for_coding(
     assert json.loads(result) == {
         "action": "search_code",
         "query": "adaptive_allocator",
-        "_tool_call_id": "call_123",
+        "_tool_name": "search_code",
     }
     assert "tools" in captured
-    assert captured["tool_choice"] == "required"
+    assert captured["think"] is False
     assert "response_format" not in captured
 
 
@@ -324,7 +319,7 @@ def test_agent_replays_native_tool_history(tmp_path: Path) -> None:
                         "path": "painter/demo.py",
                         "start_line": 1,
                         "end_line": 1,
-                        "_tool_call_id": "call_read",
+                        "_tool_name": "read_file",
                     }
                 )
             self.second_messages = list(messages)
@@ -332,7 +327,7 @@ def test_agent_replays_native_tool_history(tmp_path: Path) -> None:
                 {
                     "action": "finish",
                     "summary": "done",
-                    "_tool_call_id": "call_finish",
+                    "_tool_name": "finish",
                 }
             )
 
@@ -345,8 +340,13 @@ def test_agent_replays_native_tool_history(tmp_path: Path) -> None:
     assistant_message = model.second_messages[-2]
     tool_message = model.second_messages[-1]
     assert assistant_message["role"] == "assistant"
-    assert assistant_message["tool_calls"][0]["id"] == "call_read"
+    assert assistant_message["tool_calls"][0]["function"]["name"] == "read_file"
+    assert assistant_message["tool_calls"][0]["function"]["arguments"] == {
+        "path": "painter/demo.py",
+        "start_line": 1,
+        "end_line": 1,
+    }
     assert tool_message["role"] == "tool"
-    assert tool_message["tool_call_id"] == "call_read"
+    assert tool_message["tool_name"] == "read_file"
     tool_payload = json.loads(str(tool_message["content"]))
     assert tool_payload["observation"]["ok"] is True

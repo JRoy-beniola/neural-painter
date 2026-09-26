@@ -18,8 +18,12 @@ class FakeModel:
     def __init__(self, responses: list[str]) -> None:
         self.responses = list(responses)
 
-    def complete(self, messages: list[dict[str, str]]) -> str:
-        del messages
+    def complete(
+        self,
+        messages: list[dict[str, str]],
+        **kwargs: object,
+    ) -> str:
+        del messages, kwargs
         if not self.responses:
             raise RuntimeError("no fake response left")
         return self.responses.pop(0)
@@ -108,6 +112,7 @@ def test_openai_compatible_model_requests_json_mode(monkeypatch: pytest.MonkeyPa
     assert result == '{"action":"finish"}'
     assert captured["response_format"] == {"type": "json_object"}
     assert captured["reasoning_effort"] == "none"
+    assert captured["temperature"] == 0.0
 
 
 def test_openai_compatible_model_rejects_empty_content(

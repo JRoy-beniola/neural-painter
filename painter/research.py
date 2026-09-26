@@ -201,6 +201,16 @@ def _candidate_priority(
     score = 0.0
     codes = {diagnosis.code for diagnosis in diagnoses}
 
+    if "bootstrap" in codes:
+        if candidate.method == "adaptive_rich_residual":
+            score += 10.0
+        elif candidate.method == "polygon_rich_residual":
+            score += 8.0
+        elif candidate.method == "region_rich_residual":
+            score += 7.0
+        elif "refined" in candidate.method:
+            score -= 3.0
+
     if "global_structure" in codes or "capacity_allocation" in codes:
         if candidate.method == "adaptive_rich_residual":
             score += 6.0

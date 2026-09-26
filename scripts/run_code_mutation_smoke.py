@@ -17,7 +17,7 @@ def main() -> None:
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
 
-    root = Path(".").resolve()
+    root = Path.cwd()
     model = OpenAICompatibleModel(
         args.base_url,
         args.model,
